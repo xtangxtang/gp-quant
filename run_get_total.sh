@@ -67,11 +67,13 @@ while [[ $# -gt 0 ]]; do
 done
 
 # 构建 Python 命令
-if command -v conda >/dev/null 2>&1; then
-    CMD="conda run -n xtang-gp python src/get_selflist_daily.py"
-else
-    CMD="python src/get_selflist_daily.py"
-fi
+# if command -v conda >/dev/null 2>&1; then
+#     CMD="conda run -n xtang-gp python src/get_total_daily.py"
+# else
+#     CMD="python src/get_total_daily.py"
+# fi
+
+CMD="python src/get_total_daily.py"
 
 if [ -n "$START_DATE" ]; then
     CMD="$CMD --start_date $START_DATE"
@@ -97,7 +99,6 @@ if [ -n "$NO_IPO_FILTER" ]; then
     CMD="$CMD --no_ipo_filter"
 fi
 
-# 打印并执行命令
 echo "执行命令: $CMD"
 echo "----------------------------------------"
 eval $CMD

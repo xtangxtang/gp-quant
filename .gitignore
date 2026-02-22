@@ -21,3 +21,6 @@ my_stock_data/
 failed_tasks.json
 self_gplist.json
 example.json
+_smoke_out/
+_smoke_total/
+_smoke*

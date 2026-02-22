@@ -4,3 +4,5 @@ pandas
 selenium
 fake-useragent
 lxml
+chinesecalendar
+chinesecalendar

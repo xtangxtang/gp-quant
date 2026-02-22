@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+env/
+.env/
+.venv/
+
+# IDEs and editors
+.vscode/
+.idea/
+
+# Data and configuration
+gp_daily/
+my_data/
+my_stock_data/
+*.csv
+failed_tasks.json
+self_gplist.json
+example.json

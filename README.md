@@ -127,3 +127,35 @@ python src/downloader/get_selflist_daily.py --start_date 2023-08-01 --output_dir
 - 成交量(手)
 - 成交额(元)
 - 均价
+
+## Web 界面（浏览最近一天交易总结）
+
+在 `gp-quant` 内提供了一个最小 Web 页面，用于浏览**最近一天**每只股票的“交易总结”表格。
+
+- 主界面：表格默认按股票 id（symbol）排序
+- 支持排序：点击任意表头即可按该列排序（再点一次切换升/降序）
+- 数据来源：**东方财富日线接口**（`kline/get`，`klt=101`）
+
+启动方式：
+
+```bash
+pip install -r requirements.txt
+
+# 默认读取 ../gp-data 下的 total_gplist.json（无需 --list 参数）
+python src/web/app.py
+
+# 如果你的股票列表 JSON / 输出目录在其他位置，用 --output-dir 指定（推荐）
+python src/web/app.py --output-dir /path/to/output_dir
+
+# --data_dir 仍可用（等价于 --output-dir）
+python src/web/app.py --data_dir /path/to/output_dir
+```
+
+缓存行为：
+
+- Web 会把“最近一天成交总结”缓存为 CSV：`<output_dir>/total-daily-view/YYYY-MM-DD.csv`
+- 每次启动/刷新时：优先查找最新交易日对应的 CSV；存在则直接读取，不存在才从东方财富下载并写入缓存
+
+启动后访问：
+
+- http://127.0.0.1:30200/

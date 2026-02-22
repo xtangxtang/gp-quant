@@ -1,6 +1,7 @@
 beautifulsoup4
 requests
 pandas
+flask
 selenium
 fake-useragent
 lxml

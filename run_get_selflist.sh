@@ -68,9 +68,9 @@ done
 
 # 构建 Python 命令
 if command -v conda >/dev/null 2>&1; then
-    CMD="conda run -n xtang-gp python src/get_selflist_daily.py"
+    CMD="conda run -n xtang-gp python src/downloader/get_selflist_daily.py"
 else
-    CMD="python src/get_selflist_daily.py"
+    CMD="python src/downloader/get_selflist_daily.py"
 fi
 
 if [ -n "$START_DATE" ]; then

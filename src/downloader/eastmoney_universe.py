@@ -162,3 +162,45 @@ def fetch_listing_date_eastmoney(symbol: str) -> str | None:
         return None
     s = f"{v:08d}"
     return f"{s[0:4]}-{s[4:6]}-{s[6:8]}"
+
+
+def fetch_float_shares_eastmoney(symbol: str) -> float | None:
+    """Fetch float shares (流通股本) for a symbol as number of shares (股).
+
+    Uses Eastmoney quote API `qt/stock/get` fields:
+    - f85: often corresponds to float shares (流通股本)
+    - f84: often corresponds to total shares (总股本)
+
+    If f85 is unavailable, falls back to f84.
+    """
+
+    url = "https://push2.eastmoney.com/api/qt/stock/get"
+    params = {
+        "secid": symbol_to_em_secid(symbol),
+        "fields": "f84,f85",
+    }
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+        ),
+        "Referer": "https://quote.eastmoney.com/",
+        "Accept": "application/json,text/plain,*/*",
+    }
+    r = requests.get(url, params=params, headers=headers, timeout=20)
+    r.raise_for_status()
+    j = r.json()
+    data = j.get("data") or {}
+    float_shares = data.get("f85")
+    total_shares = data.get("f84")
+
+    def _as_positive_number(v):
+        try:
+            x = float(v)
+        except Exception:
+            return None
+        if x <= 0:
+            return None
+        return x
+
+    return _as_positive_number(float_shares) or _as_positive_number(total_shares)

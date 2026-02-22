@@ -8,12 +8,31 @@ from datetime import datetime, timedelta
 import pandas as pd
 import requests
 
+from eastmoney_universe import fetch_float_shares_eastmoney
+
 
 _FAIL_LOCK = threading.Lock()
+_FLOAT_SHARES_LOCK = threading.Lock()
+_FLOAT_SHARES_CACHE: dict[str, float | None] = {}
 
 
 class UnsupportedMinuteHistoryError(RuntimeError):
     pass
+
+
+def _get_float_shares_cached(symbol: str) -> float | None:
+    with _FLOAT_SHARES_LOCK:
+        if symbol in _FLOAT_SHARES_CACHE:
+            return _FLOAT_SHARES_CACHE[symbol]
+
+    try:
+        v = fetch_float_shares_eastmoney(symbol)
+    except Exception:
+        v = None
+
+    with _FLOAT_SHARES_LOCK:
+        _FLOAT_SHARES_CACHE[symbol] = v
+    return v
 
 
 def record_failure(symbol: str, date: str, output_dir: str) -> None:
@@ -283,7 +302,9 @@ def fetch_em_1m(symbol: str, date_yyyy_mm_dd: str, fqt: int | str = 1) -> pd.Dat
 
 
 def get_daily(tasks: list[dict], working_path: str, output_dir: str, fqt: int | str = 1) -> None:
-    colnames = ["时间", "开盘", "收盘", "最高", "最低", "成交量(手)", "成交额(元)", "均价"]
+    colnames = ["时间", "开盘", "收盘", "最高", "最低", "成交量(手)", "成交额(元)", "均价", "换手率(%)"]
+
+    trade_root = os.path.join(output_dir, "trade")
 
     for task in tasks:
         symbol = task["symbol"]
@@ -292,7 +313,7 @@ def get_daily(tasks: list[dict], working_path: str, output_dir: str, fqt: int | 
         print(f"Processing: {symbol} for {date_str}")
         time.sleep(random.uniform(2, 5))
 
-        csv_dir = os.path.join(output_dir, symbol)
+        csv_dir = os.path.join(trade_root, symbol)
         csv_file = f"{csv_dir}/{date_str}.csv"
 
         if os.path.exists(csv_file):
@@ -321,6 +342,13 @@ def get_daily(tasks: list[dict], working_path: str, output_dir: str, fqt: int | 
         try:
             em_df = fetch_em_1m(symbol, date_str, fqt=fqt)
             if not em_df.empty:
+                float_shares = _get_float_shares_cached(symbol)
+                if float_shares and float_shares > 0:
+                    # turnover(%) = volume_shares / float_shares * 100
+                    # volume_shares = volume_hands * 100
+                    em_df["换手率(%)"] = pd.to_numeric(em_df["成交量(手)"], errors="coerce") * 10000.0 / float_shares
+                else:
+                    em_df["换手率(%)"] = pd.NA
                 total_detail_df = em_df
                 print(f"Fetched {len(em_df)} 1-minute rows from Eastmoney for {symbol} {date_str}")
             else:

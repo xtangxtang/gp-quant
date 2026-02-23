@@ -63,6 +63,92 @@ function asNumber(v) {
   return Number.isFinite(n) ? n : NaN;
 }
 
+function fmtHM(d) {
+  if (!d) return '';
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  return `${hh}:${mm}`;
+}
+
+function makeTimeTicks(times, desired) {
+  const t = (times || []).filter(Boolean);
+  const n = t.length;
+  if (n === 0) return [];
+  if (n === 1) return [{ i: 0, label: fmtHM(t[0]) }];
+  const want = Math.max(2, Math.min(10, desired || 6));
+  const t0 = t[0].getTime();
+  const t1 = t[n - 1].getTime();
+  if (!Number.isFinite(t0) || !Number.isFinite(t1)) return [];
+
+  const used = new Set();
+  const out = [];
+  for (let k = 0; k < want; k++) {
+    const frac = (want === 1) ? 0 : (k / (want - 1));
+    const target = t0 + (t1 - t0) * frac;
+    let bestI = 0;
+    let bestD = Infinity;
+    for (let i = 0; i < n; i++) {
+      const di = Math.abs(t[i].getTime() - target);
+      if (di < bestD) {
+        bestD = di;
+        bestI = i;
+      }
+    }
+    if (used.has(bestI)) continue;
+    used.add(bestI);
+    out.push({ i: bestI, label: fmtHM(t[bestI]) });
+  }
+
+  if (!used.has(0)) out.unshift({ i: 0, label: fmtHM(t[0]) });
+  if (!used.has(n - 1)) out.push({ i: n - 1, label: fmtHM(t[n - 1]) });
+
+  out.sort((a, b) => a.i - b.i);
+  const uniq = [];
+  const seen = new Set();
+  for (const it of out) {
+    if (seen.has(it.i)) continue;
+    seen.add(it.i);
+    uniq.push(it);
+  }
+  return uniq;
+}
+
+function drawTimeRuler(ctx, plotL, plotR, baseY, times, labelColor, borderColor) {
+  const t = (times || []).filter(Boolean);
+  const n = t.length;
+  if (n === 0) return;
+  const ticks = makeTimeTicks(t, 6);
+  if (ticks.length === 0) return;
+
+  const xAt = (i) => {
+    if (n <= 1) return (plotL + plotR) / 2;
+    return plotL + (i / (n - 1)) * (plotR - plotL);
+  };
+
+  ctx.strokeStyle = borderColor;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(plotL, baseY + 0.5);
+  ctx.lineTo(plotR, baseY + 0.5);
+  ctx.stroke();
+
+  ctx.fillStyle = labelColor;
+  ctx.font = '12px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  for (const tk of ticks) {
+    const x = xAt(tk.i);
+    ctx.strokeStyle = borderColor;
+    ctx.beginPath();
+    ctx.moveTo(x, baseY);
+    ctx.lineTo(x, baseY + 6);
+    ctx.stroke();
+    ctx.fillText(tk.label, x, baseY + 8);
+  }
+  ctx.textAlign = 'start';
+  ctx.textBaseline = 'alphabetic';
+}
+
 function drawCandles(canvas, points, meta) {
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
@@ -129,7 +215,7 @@ function drawCandles(canvas, points, meta) {
   ctx.fillText(meta.title || '1分钟K线', 16, 20);
   ctx.fillStyle = muted;
   ctx.font = '12px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif';
-  ctx.fillText('OHLC', 16, 34);
+  ctx.fillText(`时间: ${fmtHM(rows[0].t)} ~ ${fmtHM(rows[rows.length - 1].t)}  |  OHLC`, 16, 34);
 
   // Y ticks
   const fmtP = (v) => {
@@ -176,6 +262,9 @@ function drawCandles(canvas, points, meta) {
     ctx.fillStyle = col;
     ctx.fillRect(Math.round(x - candleW / 2), top, candleW, h);
   }
+
+  // Time ruler (align with other plots)
+  drawTimeRuler(ctx, plotL, plotR, plotB + 2, rows.map(r => r.t), muted, border);
 }
 
 function drawTurnoverBars(canvas, points, meta) {
@@ -236,7 +325,7 @@ function drawTurnoverBars(canvas, points, meta) {
   ctx.fillText(meta.title || '换手率(%)', 16, 18);
   ctx.fillStyle = muted;
   ctx.font = '12px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif';
-  ctx.fillText('每分钟换手率柱状图', 16, 32);
+  ctx.fillText(`时间: ${fmtHM(rows[0].t)} ~ ${fmtHM(rows[rows.length - 1].t)}  |  每分钟换手率柱状图`, 16, 32);
 
   // Y tick labels (0 and max)
   const fmtV = (v) => {
@@ -260,6 +349,9 @@ function drawTurnoverBars(canvas, points, meta) {
     ctx.fillStyle = col;
     ctx.fillRect(Math.round(x - barW / 2), y, barW, Math.max(1, plotB - y));
   }
+
+  // Time ruler (align with other plots)
+  drawTimeRuler(ctx, plotL, plotR, plotB + 2, rows.map(r => r.t), muted, border);
 }
 
 function drawTrajectory(canvas, points, meta) {
@@ -288,18 +380,29 @@ function drawTrajectory(canvas, points, meta) {
   // Interpret each minute as a vector v_t=(x_t,y_t), and place vectors head-to-tail.
   // Vertex path: P_0=(0,0), P_{k+1} = P_k + v_k.
   const raw = points
-    .map(p => ({ t: parseTime(p.t), x: asNumber(p.x), y: asNumber(p.y) }))
-    .filter(p => p.t && !Number.isNaN(p.x) && !Number.isNaN(p.y));
+    .map(p => ({
+      t: parseTime(p.t),
+      x: asNumber(p.x),
+      amp: asNumber(p.amp),
+      r: asNumber(p.y),
+      c: asNumber(p.c),
+    }))
+    .filter(p => p.t && !Number.isNaN(p.x) && !Number.isNaN(p.amp) && !Number.isNaN(p.r))
+    .map(p => ({
+      ...p,
+      // Signed amplitude: magnitude reflects intraminute amplitude, sign reflects close return direction.
+      y: (p.r > 0) ? p.amp : (p.r < 0 ? -p.amp : 0),
+    }));
   if (raw.length === 0) return;
 
   let cx = 0;
   let cy = 0;
   const path = [];
-  path.push({ t: raw[0].t, x: 0, y: 0, r: 0 });
+  path.push({ t: raw[0].t, x: 0, y: 0, r: 0, c: NaN });
   for (const p of raw) {
     cx += p.x;
     cy += p.y;
-    path.push({ t: p.t, x: cx, y: cy, r: p.y });
+    path.push({ t: p.t, x: cx, y: cy, r: p.r, c: p.c });
   }
 
   const xs = path.map(p => p.x);
@@ -309,7 +412,7 @@ function drawTrajectory(canvas, points, meta) {
   if (xmin === xmax) { xmin -= 1; xmax += 1; }
   if (ymin === ymax) { ymin -= 1; ymax += 1; }
 
-  // Center Y around 0 for readability
+  // Center Y around 0 for readability (works well for signed amplitude)
   const yAbs = Math.max(Math.abs(ymin), Math.abs(ymax));
   ymin = -yAbs;
   ymax = yAbs;
@@ -343,7 +446,7 @@ function drawTrajectory(canvas, points, meta) {
   ctx.fillText(meta.title || '2D 轨迹', 16, 24);
   ctx.fillStyle = muted;
   ctx.font = '12px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif';
-  ctx.fillText('向量首尾相接：P0=(0,0)，每分钟向量叠加', 16, 40);
+  ctx.fillText(`向量首尾相接：P0=(0,0)，每分钟向量叠加（y=振幅% + 涨跌方向）  |  时间: ${fmtHM(raw[0].t)} ~ ${fmtHM(raw[raw.length - 1].t)}` , 16, 40);
 
   // Ticks (minimal)
   ctx.fillStyle = muted;
@@ -355,7 +458,7 @@ function drawTrajectory(canvas, points, meta) {
     return v.toFixed(4);
   };
   ctx.font = '12px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif';
-  const yTick = [ymin, 0, ymax].filter(v => v >= ymin && v <= ymax);
+  const yTick = [ymin, 0, ymax];
   for (const yt of yTick) {
     const py = y2py(yt);
     ctx.strokeStyle = border;
@@ -401,6 +504,27 @@ function drawTrajectory(canvas, points, meta) {
     ctx.beginPath();
     ctx.rect(ex - 4, ey - 4, 8, 8);
     ctx.fill();
+  }
+
+  // Price trend: label each minute's vector endpoint with its close price.
+  // (i=1..path.length-1 corresponds to raw[i-1])
+  const labelFont = '10px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif';
+  ctx.font = labelFont;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  for (let i = 1; i < path.length; i++) {
+    const p = path[i];
+    if (!Number.isFinite(p.c)) continue;
+    const px = x2px(p.x);
+    const py = y2py(p.y);
+    const col = (p.r > 0) ? up : (p.r < 0 ? down : fg);
+    const txt = p.c.toFixed(2);
+    // Outline improves readability on colored strokes
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = bg;
+    ctx.strokeText(txt, px + 6, py);
+    ctx.fillStyle = col;
+    ctx.fillText(txt, px + 6, py);
   }
 }
 
@@ -1181,11 +1305,13 @@ load();
 
             if prev_close is None or prev_close == 0:
               ret = 0.0
+              amp = 0.0
             else:
               ret = (close_ / prev_close - 1.0) * 100.0
+              amp = ((high_ - low_) / prev_close) * 100.0
             prev_close = close_
 
-            points.append({"t": t, "x": turnover, "y": ret, "o": open_, "h": high_, "l": low_, "c": close_})
+            points.append({"t": t, "x": turnover, "y": ret, "amp": amp, "o": open_, "h": high_, "l": low_, "c": close_})
 
         return jsonify(
             {

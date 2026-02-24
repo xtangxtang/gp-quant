@@ -82,15 +82,35 @@ python src/downloader/get_selflist_daily.py --start_date 2023-08-01
 python src/downloader/get_selflist_daily.py --start_date 2023-08-01 --output_dir my_stock_data
 ```
 
-### 5. 下载全市场股票（Total）
-使用 `run_get_total.sh` 可以自动获取截止上个交易日的全市场股票列表（保存为 `total_gplist.json`），并按日期范围下载。
+### 5. 下载全市场股票（Total，分钟数据）
+使用 `run_get_total_minute.sh` 可以自动获取截止上个交易日的全市场股票列表（保存为 `total_gplist.json`），并按日期范围下载分钟数据。
 
 `total_gplist.json` 的保存位置规则与 `self_gplist.json` 一致：显式传了 `--output_dir` 则保存在该目录；否则保存在当前运行目录。
 
 为避免“起始日期早于上市日期”的股票产生大量无效请求，全市场模式会自动拉取并缓存各股票的上市日期（文件 `total_listing_dates.json`），并跳过上市日前的任务。如需关闭该行为，可加参数 `--no_ipo_filter`。
 ```bash
-./run_get_total.sh -s 2023-08-01 -o /tmp/my_total_data
+./run_get_total_minute.sh -s 2023-08-01 -o /tmp/my_total_data
 ```
+
+### 6. 下载全市场“日线历史”(IPO -> 至今)
+
+如果你想下载“当前仍在市场的全部股票”的**日线 K 线历史数据**（从上市日起一直到最新交易日），可以使用：
+
+```bash
+./run_get_total_daily_trade.sh -o /path/to/output_dir
+```
+
+输出目录为：`<output_dir>/total-daily-trade/`，每只股票一个 CSV：
+
+```text
+<output_dir>/
+    total-daily-trade/
+        sh600000.csv
+        sz000001.csv
+        ...
+```
+
+说明：该脚本默认支持断点续跑（如果 CSV 已存在，会从最后一天继续追加）。
 
 ## 输出目录结构
 

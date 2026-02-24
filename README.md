@@ -58,6 +58,25 @@ pip install -r requirements.txt
 
 ## 启动方式
 
+### 0. 一键下载“今天所有能下载的数据”
+
+如果你希望用一个命令把**今天（或指定日期）**能拉取到的数据都拉下来（全市场分钟、自选股分钟、最近交易日交易总结 CSV、全市场日线历史断点续跑），可以用：
+
+```bash
+./run_get_today_all.sh -o /path/to/output_dir
+
+# 指定日期（默认是今天）
+./run_get_today_all.sh -o /path/to/output_dir --date 2026-02-24
+```
+
+输出会写入到同一个 `output_dir` 下的多个子目录：
+
+- `trade/<symbol>/<YYYY-MM-DD>.csv`：分钟数据（全市场 + 自选股）
+- `total-daily-view/YYYY-MM-DD.csv`：最近交易日“交易总结”缓存 CSV（按 total_gplist.json）
+- `total-daily-trade/<symbol>.csv`：全市场日线历史（断点续跑，补到最新交易日）
+
+> 注意：全市场分钟数据量非常大，首次运行会花较久时间。
+
 ### 1. 下载当天的最新数据（默认行为）
 如果不带任何参数运行，脚本会自动判断今天是否为交易日，如果是，则下载今天的数据。
 ```bash
@@ -111,6 +130,14 @@ python src/downloader/get_selflist_daily.py --start_date 2023-08-01 --output_dir
 ```
 
 说明：该脚本默认支持断点续跑（如果 CSV 已存在，会从最后一天继续追加）。
+
+### 7. 仅下载“最近交易日交易总结”CSV（不启动 Web）
+
+如果只想生成/刷新 `total-daily-view/YYYY-MM-DD.csv`（和 Web 页面的缓存一致），可以直接运行：
+
+```bash
+python src/downloader/get_total_daily_view.py --output_dir /path/to/output_dir --threads 20 --adj none
+```
 
 ## 输出目录结构
 

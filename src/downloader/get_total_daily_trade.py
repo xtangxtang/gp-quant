@@ -1,4 +1,5 @@
 import argparse
+import bisect
 import csv
 import json
 import os
@@ -9,6 +10,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 
 import requests
+import chinese_calendar as calendar
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 if _THIS_DIR not in sys.path:
@@ -183,6 +185,37 @@ def _safe_next_day(date_yyyy_mm_dd: str) -> str:
     return (d + timedelta(days=1)).strftime("%Y-%m-%d")
 
 
+def _safe_prev_day(date_yyyy_mm_dd: str) -> str:
+    d = datetime.strptime(date_yyyy_mm_dd, "%Y-%m-%d")
+    return (d - timedelta(days=1)).strftime("%Y-%m-%d")
+
+
+def _is_trading_day(d: datetime) -> bool:
+    # Keep consistent with other downloaders in this repo: only weekdays.
+    # chinese_calendar only supports a limited year range (commonly 2004..current);
+    # for years outside the supported window, fall back to weekday-only (Mon-Fri).
+    y = d.year
+    if y < 2004 or y > 2100:
+        return d.weekday() < 5
+    try:
+        return calendar.is_workday(d) and d.weekday() < 5
+    except NotImplementedError:
+        return d.weekday() < 5
+
+
+def _trading_days_between(start_date: str, end_date: str) -> list[str]:
+    start = datetime.strptime(start_date, "%Y-%m-%d")
+    end = datetime.strptime(end_date, "%Y-%m-%d")
+    days: list[str] = []
+    cur = start
+    one = timedelta(days=1)
+    while cur <= end:
+        if _is_trading_day(cur):
+            days.append(cur.strftime("%Y-%m-%d"))
+        cur += one
+    return days
+
+
 def _read_last_date(csv_path: str) -> str | None:
     if not os.path.exists(csv_path):
         return None
@@ -222,6 +255,96 @@ def _read_last_date(csv_path: str) -> str | None:
     return last.split(",", 1)[0].strip() or None
 
 
+def _load_existing_rows(csv_path: str) -> tuple[dict[str, dict], list[str]]:
+    """Load existing CSV into a date->row map and sorted list of dates."""
+    if not os.path.exists(csv_path):
+        return {}, []
+
+    rows_by_date: dict[str, dict] = {}
+    dates: list[str] = []
+    try:
+        with open(csv_path, "r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for r in reader:
+                if not r:
+                    continue
+                d = (r.get("date") or "").strip()
+                if not d:
+                    continue
+                if d not in rows_by_date:
+                    dates.append(d)
+                rows_by_date[d] = dict(r)
+    except Exception:
+        # If file is malformed, treat as empty so we can rebuild.
+        return {}, []
+
+    dates.sort()
+    return rows_by_date, dates
+
+
+def _write_all_rows(csv_path: str, rows_by_date: dict[str, dict]) -> None:
+    os.makedirs(os.path.dirname(csv_path) or ".", exist_ok=True)
+    tmp = csv_path + ".tmp"
+    fieldnames = [
+        "date",
+        "open",
+        "close",
+        "high",
+        "low",
+        "volume",
+        "amount",
+        "amplitude",
+        "pctchg",
+        "chg",
+        "turnover",
+    ]
+    with open(tmp, "w", encoding="utf-8", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=fieldnames)
+        w.writeheader()
+        for d in sorted(rows_by_date.keys()):
+            w.writerow(rows_by_date[d])
+    os.replace(tmp, csv_path)
+
+
+def _compress_missing_ranges(expected: list[str], have: set[str]) -> list[tuple[str, str]]:
+    """Compress missing expected dates into contiguous ranges (by expected list adjacency)."""
+    ranges: list[tuple[str, str]] = []
+    cur_start = None
+    cur_end = None
+    for d in expected:
+        if d in have:
+            if cur_start is not None:
+                ranges.append((cur_start, cur_end or cur_start))
+                cur_start = None
+                cur_end = None
+            continue
+
+        if cur_start is None:
+            cur_start = d
+            cur_end = d
+        else:
+            cur_end = d
+
+    if cur_start is not None:
+        ranges.append((cur_start, cur_end or cur_start))
+    return ranges
+
+
+def _split_range_by_days(start: str, end: str, max_days: int = 260) -> list[tuple[str, str]]:
+    """Split a (start,end) date range into smaller chunks by calendar days to avoid huge responses."""
+    s = datetime.strptime(start, "%Y-%m-%d")
+    e = datetime.strptime(end, "%Y-%m-%d")
+    if s > e:
+        return []
+    chunks: list[tuple[str, str]] = []
+    cur = s
+    while cur <= e:
+        nxt = min(e, cur + timedelta(days=max_days))
+        chunks.append((cur.strftime("%Y-%m-%d"), nxt.strftime("%Y-%m-%d")))
+        cur = nxt + timedelta(days=1)
+    return chunks
+
+
 def _append_rows(csv_path: str, rows: list[dict]) -> None:
     if not rows:
         return
@@ -251,53 +374,114 @@ def _append_rows(csv_path: str, rows: list[dict]) -> None:
             w.writerow(r)
 
 
-def _download_one_symbol(symbol: str, listing_date: str | None, end_date: str, out_dir: str, fqt: str) -> tuple[str, str]:
+def _download_one_symbol(
+    symbol: str,
+    listing_date: str | None,
+    end_date: str,
+    out_dir: str,
+    fqt: str,
+    trading_days_all: list[str],
+) -> tuple[str, str]:
     root = os.path.join(out_dir, "total-daily-trade")
     csv_path = os.path.join(root, f"{symbol}.csv")
 
-    last_date = _read_last_date(csv_path)
-
-    if last_date:
-        start_date = _safe_next_day(last_date)
-    else:
-        start_date = listing_date or "1990-01-01"
-
-    if start_date > end_date:
+    desired_start = listing_date or "1990-01-01"
+    if desired_start > end_date:
         return symbol, "up-to-date"
 
-    beg = _yyyymmdd(start_date)
-    end = _yyyymmdd(end_date)
+    # Load existing data to scan continuity and fill missing segments.
+    rows_by_date, existing_dates = _load_existing_rows(csv_path)
+    have: set[str] = set(existing_dates)
 
-    # Jitter to avoid bursting
-    time.sleep(random.uniform(0.05, 0.25))
+    # Expected trading days for this symbol range.
+    # Use precomputed trading_days_all and slice using bisect.
+    start_idx = bisect.bisect_left(trading_days_all, desired_start)
+    end_idx = bisect.bisect_right(trading_days_all, end_date)
+    expected = trading_days_all[start_idx:end_idx]
 
-    # small retry loop
-    last_exc: Exception | None = None
-    for attempt in range(3):
-        try:
-            klines = _fetch_em_daily_klines(symbol, beg, end, fqt)
-            parsed = []
-            for line in klines:
-                obj = _parse_kline_line(line)
-                if not obj:
+    if not expected:
+        return symbol, "up-to-date"
+
+    missing_ranges = _compress_missing_ranges(expected, have)
+    if not missing_ranges:
+        return symbol, "up-to-date"
+
+    # Track whether we can append-only (i.e., all new rows are strictly after max existing date).
+    max_existing = existing_dates[-1] if existing_dates else None
+
+    total_new = 0
+    filled_ranges = 0
+
+    def _download_range(range_start: str, range_end: str) -> list[dict]:
+        beg = _yyyymmdd(range_start)
+        end = _yyyymmdd(range_end)
+
+        time.sleep(random.uniform(0.05, 0.25))
+        last_exc: Exception | None = None
+        for attempt in range(3):
+            try:
+                klines = _fetch_em_daily_klines(symbol, beg, end, fqt)
+                parsed: list[dict] = []
+                for line in klines:
+                    obj = _parse_kline_line(line)
+                    if not obj:
+                        continue
+                    d = obj.get("date")
+                    if not d:
+                        continue
+                    if d < range_start or d > range_end:
+                        continue
+                    parsed.append(obj)
+                parsed.sort(key=lambda x: x["date"])
+                return parsed
+            except Exception as e:
+                last_exc = e
+                time.sleep(0.8 * (attempt + 1) + random.uniform(0.0, 0.4))
+        raise last_exc or RuntimeError("download failed")
+
+    # Download missing ranges; split into smaller calendar chunks to reduce timeouts.
+    new_rows: list[dict] = []
+    try:
+        for rs, re in missing_ranges:
+            for cs, ce in _split_range_by_days(rs, re, max_days=260):
+                parsed = _download_range(cs, ce)
+                if not parsed:
                     continue
-                if obj["date"] < start_date:
-                    continue
-                parsed.append(obj)
-            parsed.sort(key=lambda x: x["date"])
-            if last_date:
-                parsed = [r for r in parsed if r["date"] > last_date]
-            if parsed:
-                _append_rows(csv_path, parsed)
-                return symbol, f"ok +{len(parsed)}"
-            return symbol, "ok +0"
-        except Exception as e:
-            last_exc = e
-            # backoff
-            time.sleep(0.8 * (attempt + 1) + random.uniform(0.0, 0.4))
+                filled_ranges += 1
+                for r in parsed:
+                    d = r.get("date")
+                    if not d:
+                        continue
+                    if d in rows_by_date:
+                        continue
+                    rows_by_date[d] = r
+                    new_rows.append(r)
+                    total_new += 1
+    except Exception as e:
+        return symbol, f"failed {type(e).__name__}: {str(e)[:180]}"
 
-    msg = f"failed {type(last_exc).__name__}: {str(last_exc)[:180]}" if last_exc else "failed"
-    return symbol, msg
+    if total_new <= 0:
+        # We attempted to fill gaps, but Eastmoney may not have data for some expected days (e.g. suspension).
+        return symbol, "ok +0"
+
+    # Decide append vs rewrite to keep CSV strictly chronological.
+    need_rewrite = False
+    if max_existing is None:
+        need_rewrite = True
+    else:
+        for r in new_rows:
+            d = r.get("date")
+            if d and d <= max_existing:
+                need_rewrite = True
+                break
+
+    if need_rewrite:
+        _write_all_rows(csv_path, rows_by_date)
+    else:
+        new_rows.sort(key=lambda x: x["date"])
+        _append_rows(csv_path, new_rows)
+
+    return symbol, f"ok +{total_new} (filled_ranges={filled_ranges})"
 
 
 def main() -> None:
@@ -371,6 +555,20 @@ def main() -> None:
     # Ensure target dir exists
     os.makedirs(os.path.join(out_dir, "total-daily-trade"), exist_ok=True)
 
+    # Precompute trading calendar once; reused by all symbols for continuity scan.
+    # Global start: earliest possible IPO date used by this script.
+    global_start = "1990-01-01"
+    if not args.no_ipo_filter and listing_dates:
+        try:
+            global_start = min(listing_dates.values())
+        except Exception:
+            global_start = "1990-01-01"
+
+    try:
+        trading_days_all = _trading_days_between(global_start, end_date)
+    except Exception:
+        trading_days_all = _trading_days_between("1990-01-01", end_date)
+
     max_workers = max(1, int(args.threads))
     ok = 0
     up_to_date = 0
@@ -382,7 +580,7 @@ def main() -> None:
         ipo = listing_dates.get(sym)
         if args.no_ipo_filter:
             ipo = ipo or "1990-01-01"
-        return _download_one_symbol(sym, ipo, end_date, out_dir, fqt)
+        return _download_one_symbol(sym, ipo, end_date, out_dir, fqt, trading_days_all)
 
     with ThreadPoolExecutor(max_workers=max_workers) as ex:
         futures = {ex.submit(_task, s): s for s in symbols}

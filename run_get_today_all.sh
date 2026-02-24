@@ -25,7 +25,9 @@ show_help() {
   echo "    2) 自选股分钟数据（当天） -> <output_dir>/trade/<symbol>/<date>.csv"
   echo "    3) 最近交易日交易总结（全市场列表）-> <output_dir>/total-daily-view/YYYY-MM-DD.csv"
   echo "    4) 财务+估值（最新交易日缓存）-> <output_dir>/total-fundamentals/YYYY-MM-DD.csv"
-  echo "    5) 全市场日线历史（断点续跑，补齐缺失段）-> <output_dir>/total-daily-trade/<symbol>.csv"
+  echo "    5) 个股资金流向（最新交易日缓存）-> <output_dir>/total-fundflow-stock/YYYY-MM-DD.csv"
+  echo "    6) 行业资金流向（最新交易日缓存）-> <output_dir>/total-fundflow-industry/YYYY-MM-DD.csv"
+  echo "    7) 全市场日线历史（断点续跑，补齐缺失段）-> <output_dir>/total-daily-trade/<symbol>.csv"
   echo ""
   echo "示例:"
   echo "  $0 -o ../gp-data"
@@ -104,7 +106,13 @@ python src/downloader/get_total_daily_view.py "${COMMON_DAILY_ARGS[@]}" --list t
 # 4) Fundamentals: valuation snapshot + key finance indicators cached as CSV
 python src/downloader/get_total_fundamentals.py --output_dir "$OUTPUT_DIR" --threads "$THREADS" --list total
 
-# 5) Total daily kline history (scan continuity and fill gaps, then extend to latest trading day)
+# 5) Stock fund flow (latest trading day snapshot)
+python src/downloader/get_total_fundflow_stock.py --output_dir "$OUTPUT_DIR" --threads "$THREADS" --list total
+
+# 6) Industry fund flow (latest trading day snapshot)
+python src/downloader/get_total_fundflow_industry.py --output_dir "$OUTPUT_DIR"
+
+# 7) Total daily kline history (scan continuity and fill gaps, then extend to latest trading day)
 python src/downloader/get_total_daily_trade.py --output_dir "$OUTPUT_DIR" --threads "$THREADS" --adj "$DAILY_ADJ" "${COMMON_DAILY_TRADE_EXTRA[@]}"
 
 set +x

@@ -74,6 +74,8 @@ pip install -r requirements.txt
 - `trade/<symbol>/<YYYY-MM-DD>.csv`：分钟数据（全市场 + 自选股）
 - `total-daily-view/YYYY-MM-DD.csv`：最近交易日“交易总结”缓存 CSV（按 total_gplist.json）
 - `total-fundamentals/YYYY-MM-DD.csv`：财务 + 估值（估值快照 + F10 主要财务指标）缓存 CSV
+- `total-fundflow-stock/YYYY-MM-DD.csv`：个股资金流向（主力/超大/大/中/小 单净流入）缓存 CSV
+- `total-fundflow-industry/YYYY-MM-DD.csv`：行业板块资金流向（主力/超大/大/中/小 单净流入）缓存 CSV
 - `total-daily-trade/<symbol>.csv`：全市场日线历史（断点续跑 + 扫描日期连续性并补齐缺失段）
 
 > 注意：全市场分钟数据量非常大，首次运行会花较久时间。
@@ -151,6 +153,26 @@ python src/downloader/get_total_daily_view.py --output_dir /path/to/output_dir -
 
 ```bash
 python src/downloader/get_total_fundamentals.py --output_dir /path/to/output_dir --threads 20 --list total
+```
+
+### 9. 下载“个股资金流向”汇总 CSV
+
+该脚本会对 `total_gplist.json`（或 `self_gplist.json`）中的每只股票，拉取最新交易日的资金流向快照（主力/超大/大/中/小 单净流入），缓存为：
+
+`<output_dir>/total-fundflow-stock/YYYY-MM-DD.csv`
+
+```bash
+python src/downloader/get_total_fundflow_stock.py --output_dir /path/to/output_dir --threads 24 --list total
+```
+
+### 10. 下载“行业板块资金流向”汇总 CSV
+
+该脚本会拉取最新行业板块资金流向快照（主力/超大/大/中/小 单净流入），缓存为：
+
+`<output_dir>/total-fundflow-industry/YYYY-MM-DD.csv`
+
+```bash
+python src/downloader/get_total_fundflow_industry.py --output_dir /path/to/output_dir
 ```
 
 ## 输出目录结构

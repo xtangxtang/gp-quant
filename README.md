@@ -73,7 +73,8 @@ pip install -r requirements.txt
 
 - `trade/<symbol>/<YYYY-MM-DD>.csv`：分钟数据（全市场 + 自选股）
 - `total-daily-view/YYYY-MM-DD.csv`：最近交易日“交易总结”缓存 CSV（按 total_gplist.json）
-- `total-daily-trade/<symbol>.csv`：全市场日线历史（断点续跑，补到最新交易日）
+- `total-fundamentals/YYYY-MM-DD.csv`：财务 + 估值（估值快照 + F10 主要财务指标）缓存 CSV
+- `total-daily-trade/<symbol>.csv`：全市场日线历史（断点续跑 + 扫描日期连续性并补齐缺失段）
 
 > 注意：全市场分钟数据量非常大，首次运行会花较久时间。
 
@@ -137,6 +138,19 @@ python src/downloader/get_selflist_daily.py --start_date 2023-08-01 --output_dir
 
 ```bash
 python src/downloader/get_total_daily_view.py --output_dir /path/to/output_dir --threads 20 --adj none
+```
+
+### 8. 下载“财务 + 估值”汇总 CSV（不启动 Web）
+
+该脚本会对 `total_gplist.json`（或 `self_gplist.json`）中的每只股票，抓取：
+
+- 估值快照：价格、市值、PE(P/E TTM)、PB、行业等（来自东方财富行情接口）
+- 财务关键指标：EPS、BPS、营收、净利润、同比、ROE 等（来自东方财富 F10 主要指标）
+
+并缓存为：`<output_dir>/total-fundamentals/YYYY-MM-DD.csv`。
+
+```bash
+python src/downloader/get_total_fundamentals.py --output_dir /path/to/output_dir --threads 20 --list total
 ```
 
 ## 输出目录结构

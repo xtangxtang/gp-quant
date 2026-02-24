@@ -24,7 +24,8 @@ show_help() {
   echo "    1) 全市场分钟数据（当天） -> <output_dir>/trade/<symbol>/<date>.csv"
   echo "    2) 自选股分钟数据（当天） -> <output_dir>/trade/<symbol>/<date>.csv"
   echo "    3) 最近交易日交易总结（全市场列表）-> <output_dir>/total-daily-view/YYYY-MM-DD.csv"
-  echo "    4) 全市场日线历史（断点续跑，补到最新交易日）-> <output_dir>/total-daily-trade/<symbol>.csv"
+  echo "    4) 财务+估值（最新交易日缓存）-> <output_dir>/total-fundamentals/YYYY-MM-DD.csv"
+  echo "    5) 全市场日线历史（断点续跑，补齐缺失段）-> <output_dir>/total-daily-trade/<symbol>.csv"
   echo ""
   echo "示例:"
   echo "  $0 -o ../gp-data"
@@ -100,7 +101,10 @@ python src/downloader/get_selflist_daily.py "${COMMON_MINUTE_ARGS[@]}"
 # 3) Latest trading-day daily summaries cached as CSV
 python src/downloader/get_total_daily_view.py "${COMMON_DAILY_ARGS[@]}" --list total
 
-# 4) Total daily kline history (incremental append to latest trading day)
+# 4) Fundamentals: valuation snapshot + key finance indicators cached as CSV
+python src/downloader/get_total_fundamentals.py --output_dir "$OUTPUT_DIR" --threads "$THREADS" --list total
+
+# 5) Total daily kline history (scan continuity and fill gaps, then extend to latest trading day)
 python src/downloader/get_total_daily_trade.py --output_dir "$OUTPUT_DIR" --threads "$THREADS" --adj "$DAILY_ADJ" "${COMMON_DAILY_TRADE_EXTRA[@]}"
 
 set +x

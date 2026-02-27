@@ -9,6 +9,7 @@ import time
 
 import chinese_calendar as calendar
 import pandas as pd
+import requests
 
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -16,7 +17,7 @@ if _THIS_DIR not in sys.path:
     sys.path.insert(0, _THIS_DIR)
 
 from eastmoney_universe import fetch_all_symbols_eastmoney, fetch_listing_date_eastmoney, last_trading_day
-from downloader_common import run_tasks_in_threads
+from downloader_common import ProxyConnectivityError, run_tasks_in_threads
 
 
 def _load_total_list(path: str) -> list[str] | None:
@@ -36,6 +37,7 @@ def _load_total_list(path: str) -> list[str] | None:
 
 def _ensure_total_list(path: str) -> list[str]:
     asof = last_trading_day()
+    cached = _load_total_list(path) if os.path.exists(path) else None
     if os.path.exists(path):
         try:
             with open(path, "r", encoding="utf-8") as f:
@@ -45,7 +47,19 @@ def _ensure_total_list(path: str) -> list[str]:
         except Exception:
             pass
 
-    payload = fetch_all_symbols_eastmoney()
+    try:
+        payload = fetch_all_symbols_eastmoney()
+    except requests.exceptions.ProxyError as e:
+        if cached:
+            print(f"[WARN] ProxyError while refreshing total list; using cached symbols from {path}")
+            return cached
+        print(f"[FATAL] ProxyError while fetching total list: {e}")
+        raise SystemExit(86)
+    except Exception as e:
+        if cached:
+            print(f"[WARN] Failed to refresh total list; using cached symbols from {path}: {type(e).__name__}: {str(e)[:160]}")
+            return cached
+        raise
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
@@ -217,4 +231,8 @@ if __name__ == "__main__":
         if skipped > 0:
             print(f"Skipped {skipped} pre-IPO tasks using listing-date cache")
 
-    run_tasks_in_threads(tasks_to_run, chunks_num, working_path, output_dir, fqt=args.adj)
+    try:
+        run_tasks_in_threads(tasks_to_run, chunks_num, working_path, output_dir, fqt=args.adj)
+    except ProxyConnectivityError as e:
+        print(f"[FATAL] Proxy connectivity error: {e}")
+        raise SystemExit(86)

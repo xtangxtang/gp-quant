@@ -15,7 +15,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 if _THIS_DIR not in sys.path:
     sys.path.insert(0, _THIS_DIR)
 
-from downloader_common import run_tasks_in_threads
+from downloader_common import ProxyConnectivityError, run_tasks_in_threads
 from eastmoney_universe import fetch_listing_date_eastmoney
 
 
@@ -203,7 +203,11 @@ def main() -> None:
         print("No tasks to run.")
         raise SystemExit(0)
 
-    run_tasks_in_threads(tasks_to_run, chunks_num, working_path, output_dir, fqt=args.adj)
+    try:
+        run_tasks_in_threads(tasks_to_run, chunks_num, working_path, output_dir, fqt=args.adj)
+    except ProxyConnectivityError as e:
+        print(f"[FATAL] Proxy connectivity error: {e}")
+        raise SystemExit(86)
 
 
 if __name__ == "__main__":

@@ -1,8 +1,14 @@
 import math
+import os
 from datetime import datetime, timedelta
 
 import chinese_calendar as calendar
 import requests
+
+
+_HTTP = requests.Session()
+if os.getenv("GP_NO_PROXY", "").strip().lower() in {"1", "true", "yes"}:
+    _HTTP.trust_env = False
 
 
 def last_trading_day(today: datetime | None = None) -> str:
@@ -75,7 +81,7 @@ def fetch_all_symbols_eastmoney(fs: str | None = None) -> dict:
         "Accept": "application/json,text/plain,*/*",
     }
 
-    first = requests.get(url, params=base_params, headers=headers, timeout=20)
+    first = _HTTP.get(url, params=base_params, headers=headers, timeout=20)
     first.raise_for_status()
     first_json = first.json()
     total = int((first_json.get("data") or {}).get("total") or 0)
@@ -100,7 +106,7 @@ def fetch_all_symbols_eastmoney(fs: str | None = None) -> dict:
     for pn in range(2, pages + 1):
         params = dict(base_params)
         params["pn"] = pn
-        r = requests.get(url, params=params, headers=headers, timeout=20)
+        r = _HTTP.get(url, params=params, headers=headers, timeout=20)
         r.raise_for_status()
         j = r.json()
         _consume((j.get("data") or {}).get("diff") or [])
@@ -147,7 +153,7 @@ def fetch_listing_date_eastmoney(symbol: str) -> str | None:
         "Referer": "https://quote.eastmoney.com/",
         "Accept": "application/json,text/plain,*/*",
     }
-    r = requests.get(url, params=params, headers=headers, timeout=20)
+    r = _HTTP.get(url, params=params, headers=headers, timeout=20)
     r.raise_for_status()
     j = r.json()
     data = j.get("data") or {}
@@ -187,7 +193,7 @@ def fetch_float_shares_eastmoney(symbol: str) -> float | None:
         "Referer": "https://quote.eastmoney.com/",
         "Accept": "application/json,text/plain,*/*",
     }
-    r = requests.get(url, params=params, headers=headers, timeout=20)
+    r = _HTTP.get(url, params=params, headers=headers, timeout=20)
     r.raise_for_status()
     j = r.json()
     data = j.get("data") or {}

@@ -4,6 +4,7 @@ import csv
 import json
 import os
 import random
+import threading
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -12,11 +13,65 @@ from datetime import datetime, timedelta
 import requests
 import chinese_calendar as calendar
 
+
+_NO_PROXY = os.getenv("GP_NO_PROXY", "").strip().lower() in {"1", "true", "yes"}
+
+
+_HTTP_LOCAL = threading.local()
+
+
+EXIT_PROXY_ERROR = 86
+_PROXY_ABORT_EVENT = threading.Event()
+
+
+def _is_proxy_error(e: Exception) -> bool:
+    if isinstance(e, requests.exceptions.ProxyError):
+        return True
+    msg = (str(e) or "").lower()
+    return "proxy" in msg and ("eof" in msg or "tls" in msg or "error" in msg)
+
+
+def _get_http_session() -> requests.Session:
+    s = getattr(_HTTP_LOCAL, "session", None)
+    if s is None:
+        s = requests.Session()
+        if _NO_PROXY:
+            s.trust_env = False
+        _HTTP_LOCAL.session = s
+    return s
+
+
+_EM_MAX_INFLIGHT = max(1, int(os.getenv("GP_EM_MAX_INFLIGHT", "4") or "4"))
+_EM_HTTP_SEM = threading.BoundedSemaphore(_EM_MAX_INFLIGHT)
+
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 if _THIS_DIR not in sys.path:
     sys.path.insert(0, _THIS_DIR)
 
 from eastmoney_universe import fetch_all_symbols_eastmoney, fetch_listing_date_eastmoney, last_trading_day, symbol_to_em_secid
+
+from daily_kline_provider import fetch_daily_kline_lines
+
+
+def _http_get_json(url: str, params: dict, timeout: int = 30, retries: int = 3, headers: dict | None = None) -> dict:
+    last_err: Exception | None = None
+    for i in range(max(1, int(retries))):
+        try:
+            with _EM_HTTP_SEM:
+                r = _get_http_session().get(url, params=params, headers=headers or _em_headers(), timeout=timeout)
+                r.raise_for_status()
+                return r.json()
+        except requests.exceptions.ProxyError as e:
+            last_err = e
+        except requests.exceptions.RequestException as e:
+            last_err = e
+
+        if i < retries - 1:
+            time.sleep(min(8.0, 0.6 * (2**i)) + random.uniform(0.2, 1.0))
+
+    if last_err is None:
+        raise RuntimeError("HTTP request failed for unknown reason")
+    raise last_err
 
 
 def _normalize_adj(adj: str) -> str:
@@ -42,24 +97,7 @@ def _em_headers() -> dict:
 
 
 def _fetch_em_daily_klines(symbol: str, beg_yyyymmdd: str, end_yyyymmdd: str, fqt: str) -> list[str]:
-    url = "https://push2his.eastmoney.com/api/qt/stock/kline/get"
-    params = {
-        "fields1": "f1,f2,f3,f4,f5,f6",
-        "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
-        "ut": "7eea3edcaed734bea9cbfc24409ed989",
-        "klt": "101",
-        "fqt": fqt,
-        "secid": symbol_to_em_secid(symbol),
-        "beg": beg_yyyymmdd,
-        "end": end_yyyymmdd,
-        # Eastmoney supports lmt to increase returned rows; harmless if ignored.
-        "lmt": "1000000",
-    }
-
-    r = requests.get(url, params=params, headers=_em_headers(), timeout=30)
-    r.raise_for_status()
-    j = r.json()
-    return (j.get("data") or {}).get("klines") or []
+    return fetch_daily_kline_lines(symbol, beg_yyyymmdd, end_yyyymmdd, fqt)
 
 
 def _parse_kline_line(line: str) -> dict | None:
@@ -122,6 +160,7 @@ def _load_total_list(path: str) -> list[str] | None:
 
 def _ensure_total_list(path: str) -> list[str]:
     asof = last_trading_day()
+    cached = _load_total_list(path) if os.path.exists(path) else None
     if os.path.exists(path):
         try:
             obj = _load_json(path)
@@ -130,7 +169,19 @@ def _ensure_total_list(path: str) -> list[str]:
         except Exception:
             pass
 
-    payload = fetch_all_symbols_eastmoney()
+    try:
+        payload = fetch_all_symbols_eastmoney()
+    except requests.exceptions.ProxyError as e:
+        if cached:
+            print(f"[WARN] ProxyError while refreshing total list; using cached symbols from {path}")
+            return cached
+        print(f"[FATAL] ProxyError while fetching total list: {e}")
+        raise SystemExit(EXIT_PROXY_ERROR)
+    except Exception as e:
+        if cached:
+            print(f"[WARN] Failed to refresh total list; using cached symbols from {path}: {type(e).__name__}: {str(e)[:160]}")
+            return cached
+        raise
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     _save_json(path, payload)
     return payload["symbols"]
@@ -382,6 +433,8 @@ def _download_one_symbol(
     fqt: str,
     trading_days_all: list[str],
 ) -> tuple[str, str]:
+    if _PROXY_ABORT_EVENT.is_set():
+        return symbol, "aborted"
     root = os.path.join(out_dir, "total-daily-trade")
     csv_path = os.path.join(root, f"{symbol}.csv")
 
@@ -413,12 +466,16 @@ def _download_one_symbol(
     filled_ranges = 0
 
     def _download_range(range_start: str, range_end: str) -> list[dict]:
+        if _PROXY_ABORT_EVENT.is_set():
+            return []
         beg = _yyyymmdd(range_start)
         end = _yyyymmdd(range_end)
 
         time.sleep(random.uniform(0.05, 0.25))
         last_exc: Exception | None = None
         for attempt in range(3):
+            if _PROXY_ABORT_EVENT.is_set():
+                return []
             try:
                 klines = _fetch_em_daily_klines(symbol, beg, end, fqt)
                 parsed: list[dict] = []
@@ -436,6 +493,9 @@ def _download_one_symbol(
                 return parsed
             except Exception as e:
                 last_exc = e
+                if _is_proxy_error(e):
+                    _PROXY_ABORT_EVENT.set()
+                    raise
                 time.sleep(0.8 * (attempt + 1) + random.uniform(0.0, 0.4))
         raise last_exc or RuntimeError("download failed")
 
@@ -458,6 +518,8 @@ def _download_one_symbol(
                     new_rows.append(r)
                     total_new += 1
     except Exception as e:
+        if _is_proxy_error(e):
+            return symbol, f"proxy-error {type(e).__name__}: {str(e)[:180]}"
         return symbol, f"failed {type(e).__name__}: {str(e)[:180]}"
 
     if total_new <= 0:
@@ -586,6 +648,10 @@ def main() -> None:
         futures = {ex.submit(_task, s): s for s in symbols}
         for i, fut in enumerate(as_completed(futures), 1):
             sym, status = fut.result()
+
+            if status.startswith("proxy-error"):
+                print(f"[ABORT] Proxy error detected: {sym}: {status}")
+                raise SystemExit(EXIT_PROXY_ERROR)
             if status.startswith("ok"):
                 ok += 1
             elif status == "up-to-date":

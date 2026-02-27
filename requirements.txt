@@ -7,3 +7,4 @@ fake-useragent
 lxml
 chinesecalendar
 chinesecalendar
+tushare

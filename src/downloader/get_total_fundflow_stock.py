@@ -22,6 +22,12 @@ if _WEB_DIR not in sys.path:
     sys.path.insert(0, _WEB_DIR)
 
 from eastmoney_daily import default_data_dir, fetch_latest_daily_summary
+from csv_utils import write_rows_csv
+
+
+_HTTP = requests.Session()
+if os.getenv("GP_NO_PROXY", "").strip().lower() in {"1", "true", "yes"}:
+    _HTTP.trust_env = False
 
 
 def _ensure_dir(path: str) -> None:
@@ -83,7 +89,7 @@ def _get_json_with_retry(url: str, params: dict, timeout: int, attempts: int = 3
     last_exc: Exception | None = None
     for i in range(attempts):
         try:
-            r = requests.get(url, params=params, headers=_em_headers(), timeout=timeout)
+            r = _HTTP.get(url, params=params, headers=_em_headers(), timeout=timeout)
             r.raise_for_status()
             return r.json() or {}
         except Exception as e:
@@ -142,7 +148,6 @@ def fetch_latest_stock_fundflow(symbol: str) -> dict | None:
 
 
 def _save_rows(path: str, rows: list[dict]) -> None:
-    _ensure_dir(os.path.dirname(path))
     fieldnames = [
         "symbol",
         "symbol_name",
@@ -153,11 +158,7 @@ def _save_rows(path: str, rows: list[dict]) -> None:
         "medium_net_in",
         "small_net_in",
     ]
-    with open(path, "w", encoding="utf-8", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
-        w.writeheader()
-        for r in rows:
-            w.writerow(r)
+    write_rows_csv(path, fieldnames=fieldnames, rows=rows)
 
 
 def main() -> None:

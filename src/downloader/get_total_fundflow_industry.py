@@ -19,6 +19,12 @@ if _WEB_DIR not in sys.path:
     sys.path.insert(0, _WEB_DIR)
 
 from eastmoney_daily import default_data_dir, fetch_latest_daily_summary
+from csv_utils import write_rows_csv
+
+
+_HTTP = requests.Session()
+if os.getenv("GP_NO_PROXY", "").strip().lower() in {"1", "true", "yes"}:
+    _HTTP.trust_env = False
 
 
 def _ensure_dir(path: str) -> None:
@@ -44,7 +50,7 @@ def _get_json_with_retry(url: str, params: dict, timeout: int, attempts: int = 3
     last_exc: Exception | None = None
     for i in range(attempts):
         try:
-            r = requests.get(url, params=params, headers=_em_headers(), timeout=timeout)
+            r = _HTTP.get(url, params=params, headers=_em_headers(), timeout=timeout)
             r.raise_for_status()
             return r.json() or {}
         except Exception as e:
@@ -99,7 +105,6 @@ def fetch_all_industry_fundflows() -> list[dict]:
 
 
 def _save_rows(path: str, rows: list[dict]) -> None:
-    _ensure_dir(os.path.dirname(path))
     # field meanings (common in Eastmoney):
     # f62: 主力净流入, f66: 超大单净流入, f72: 大单净流入, f78: 中单净流入, f84: 小单净流入
     fieldnames = [
@@ -126,32 +131,32 @@ def _save_rows(path: str, rows: list[dict]) -> None:
     def g(d: dict, k: str):
         return d.get(k)
 
-    with open(path, "w", encoding="utf-8", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
-        w.writeheader()
-        for r in rows:
-            w.writerow(
-                {
-                    "date": r.get("date"),
-                    "industry_code": g(r, "f12"),
-                    "industry_name": g(r, "f14"),
-                    "price": g(r, "f2"),
-                    "pctchg": g(r, "f3"),
-                    "main_net_in": g(r, "f62"),
-                    "super_net_in": g(r, "f66"),
-                    "large_net_in": g(r, "f72"),
-                    "medium_net_in": g(r, "f78"),
-                    "small_net_in": g(r, "f84"),
-                    "main_net_in_pct": g(r, "f69"),
-                    "super_net_in_pct": g(r, "f75"),
-                    "large_net_in_pct": g(r, "f81"),
-                    "medium_net_in_pct": g(r, "f87"),
-                    "small_net_in_pct": g(r, "f184"),
-                    "strength": g(r, "f206"),
-                    "top_stock": g(r, "f204"),
-                    "top_stock_code": g(r, "f205"),
-                }
-            )
+    mapped_rows: list[dict] = []
+    for r in rows:
+        mapped_rows.append(
+            {
+                "date": r.get("date"),
+                "industry_code": g(r, "f12"),
+                "industry_name": g(r, "f14"),
+                "price": g(r, "f2"),
+                "pctchg": g(r, "f3"),
+                "main_net_in": g(r, "f62"),
+                "super_net_in": g(r, "f66"),
+                "large_net_in": g(r, "f72"),
+                "medium_net_in": g(r, "f78"),
+                "small_net_in": g(r, "f84"),
+                "main_net_in_pct": g(r, "f69"),
+                "super_net_in_pct": g(r, "f75"),
+                "large_net_in_pct": g(r, "f81"),
+                "medium_net_in_pct": g(r, "f87"),
+                "small_net_in_pct": g(r, "f184"),
+                "strength": g(r, "f206"),
+                "top_stock": g(r, "f204"),
+                "top_stock_code": g(r, "f205"),
+            }
+        )
+
+    write_rows_csv(path, fieldnames=fieldnames, rows=mapped_rows)
 
 
 def _load_symbols_for_date(output_dir: str) -> list[str]:

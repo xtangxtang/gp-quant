@@ -1,5 +1,4 @@
 import argparse
-import csv
 import json
 import os
 import sys
@@ -16,6 +15,7 @@ if _WEB_DIR not in sys.path:
     sys.path.insert(0, _WEB_DIR)
 
 from eastmoney_daily import default_data_dir, fetch_latest_daily_summary
+from csv_utils import write_rows_csv
 
 
 def _ensure_dir(path: str) -> None:
@@ -27,7 +27,6 @@ def _cache_dir(output_dir: str) -> str:
 
 
 def _save_rows_to_csv(path: str, rows: list[dict]) -> None:
-    _ensure_dir(os.path.dirname(path))
     fieldnames = [
         "symbol",
         "symbol_name",
@@ -43,11 +42,7 @@ def _save_rows_to_csv(path: str, rows: list[dict]) -> None:
         "chg",
         "amplitude",
     ]
-    with open(path, "w", encoding="utf-8", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
-        w.writeheader()
-        for r in rows:
-            w.writerow(r)
+    write_rows_csv(path, fieldnames=fieldnames, rows=rows)
 
 
 def _load_symbols_from_file(path: str) -> list[str]:

@@ -52,3 +52,14 @@ echo "======================================================"
 echo "2. 开始下载所有股票的历史交易记录..."
 echo "======================================================"
 ./run_get_tushare_daily_full.sh -o "$OUTPUT_DIR" -t "$THREADS" --token "$TOKEN" --list-file "tushare_gplist.json"
+
+if [ $? -ne 0 ]; then
+  echo "日线历史下载失败，退出。"
+  exit 1
+fi
+
+echo ""
+echo "======================================================"
+echo "3. 开始下载/更新扩展数据(复权因子/财务等)..."
+echo "======================================================"
+./run_get_tushare_extended.sh -o "$OUTPUT_DIR" -t "$THREADS" --token "$TOKEN"

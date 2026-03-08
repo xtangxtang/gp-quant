@@ -9,6 +9,78 @@ from datetime import datetime, timedelta
 import pandas as pd
 import tushare as ts
 
+
+def _infer_last_open_trade_date(pro, today_yyyymmdd: str, exchange: str = "SSE", lookback_days: int = 120) -> str:
+    """Return the last open trade date <= today (YYYYMMDD).
+
+    Used to avoid pointless requests on weekends/holidays.
+    Falls back to today on any error.
+    """
+
+    try:
+        end_dt = datetime.strptime(today_yyyymmdd, "%Y%m%d")
+        start_dt = end_dt - timedelta(days=int(lookback_days))
+        df = pro.trade_cal(exchange=exchange, start_date=start_dt.strftime("%Y%m%d"), end_date=today_yyyymmdd)
+        if df is None or df.empty:
+            return today_yyyymmdd
+        if "is_open" not in df.columns or "cal_date" not in df.columns:
+            return today_yyyymmdd
+
+        open_df = df[df["is_open"].astype(int) == 1]
+        if open_df.empty:
+            return today_yyyymmdd
+        return str(open_df["cal_date"].max())
+    except Exception:
+        return today_yyyymmdd
+
+
+def _detect_date_col(csv_path: str) -> str | None:
+    try:
+        header = pd.read_csv(csv_path, nrows=0)
+        cols = set(header.columns)
+    except Exception:
+        return None
+    for c in ("trade_date", "end_date", "ann_date", "cal_date"):
+        if c in cols:
+            return c
+    return None
+
+
+def _get_last_date(csv_path: str, date_col: str) -> str | None:
+    if not os.path.exists(csv_path):
+        return None
+    try:
+        df = pd.read_csv(csv_path, usecols=[date_col])
+        if df.empty:
+            return None
+        v = df[date_col].dropna().astype(str).max()
+        return str(v) if v else None
+    except Exception:
+        return None
+
+
+def _safe_call_api(pro, api_name: str, **params) -> pd.DataFrame:
+    """Call a tushare pro endpoint with best-effort parameter compatibility."""
+    func = getattr(pro, api_name)
+    params = {k: v for k, v in params.items() if v is not None and str(v) != ""}
+    return func(**params)
+
+
+def _fetch_incremental(pro, dataset: str, ts_code: str, start_date: str | None, end_date: str | None) -> pd.DataFrame:
+    """Fetch data for a symbol, preferring start/end params when supported."""
+
+    # Try with date filters first (many endpoints accept these).
+    if start_date or end_date:
+        try:
+            api_limiter.wait()
+            return _safe_call_api(pro, dataset, ts_code=ts_code, start_date=start_date, end_date=end_date)
+        except Exception:
+            pass
+
+    # Fallback to a plain query.
+    api_limiter.wait()
+    return _safe_call_api(pro, dataset, ts_code=ts_code)
+
 class RateLimiter:
     def __init__(self, max_calls, period):
         self.max_calls = max_calls
@@ -102,20 +174,55 @@ def fetch_data_single(pro, api_name, ts_code):
 def download_one_symbol(pro, symbol: str, out_dir: str, dataset: str, start_date: str, end_date: str) -> tuple[str, str]:
     ts_code = convert_to_ts_code(symbol)
     csv_path = os.path.join(out_dir, f"{symbol}.csv")
-    
+
+    date_col = None
+    last_date = None
     if os.path.exists(csv_path):
-        return symbol, "up-to-date"
+        date_col = _detect_date_col(csv_path)
+        if date_col:
+            last_date = _get_last_date(csv_path, date_col)
         
     # Datasets that need chunking due to row limits
     chunked_datasets = ['adj_factor', 'stk_limit']
-    
+
+    fetch_start = start_date
+    if last_date:
+        if date_col == "trade_date":
+            try:
+                last_dt = datetime.strptime(str(last_date), "%Y%m%d")
+                fetch_start = (last_dt + timedelta(days=1)).strftime("%Y%m%d")
+            except Exception:
+                fetch_start = start_date
+        else:
+            # For quarterly/announcement datasets, overlap by 1 to reduce the chance
+            # of missing late updates (we'll deduplicate when rewriting).
+            fetch_start = str(last_date)
+
+    # If we are already beyond the requested end_date, no need to call the API.
+    if last_date and date_col == "trade_date" and str(fetch_start) > str(end_date):
+        return symbol, "up-to-date"
+
     if dataset in chunked_datasets:
-        df = fetch_data_in_chunks(pro, dataset, ts_code, start_date, end_date)
+        df = fetch_data_in_chunks(pro, dataset, ts_code, fetch_start, end_date)
     else:
-        df = fetch_data_single(pro, dataset, ts_code)
+        # Best-effort incremental: try passing start/end, else fall back.
+        max_retries = 5
+        df = pd.DataFrame()
+        for attempt in range(max_retries):
+            try:
+                df = _fetch_incremental(pro, dataset, ts_code, fetch_start if last_date else start_date, end_date)
+                break
+            except Exception as e:
+                err_msg = str(e)
+                if "每分钟最多访问" in err_msg:
+                    time.sleep(30)
+                else:
+                    time.sleep(5)
+                if attempt == max_retries - 1:
+                    print(f"Failed to fetch {dataset} for {ts_code} after {max_retries} attempts.")
         
     if df is None or df.empty:
-        return symbol, "no data"
+        return symbol, "up-to-date" if last_date else "no data"
         
     # Sort by date if applicable
     if 'trade_date' in df.columns:
@@ -125,25 +232,77 @@ def download_one_symbol(pro, symbol: str, out_dir: str, dataset: str, start_date
     elif 'ann_date' in df.columns:
         df = df.sort_values('ann_date', ascending=True)
         
-    df.to_csv(csv_path, index=False)
-    return symbol, f"wrote {len(df)} rows"
+    # Persist
+    if not os.path.exists(csv_path):
+        df.to_csv(csv_path, index=False)
+        return symbol, f"wrote {len(df)} rows"
+
+    # If we fetched strictly after the last trade_date, we can append safely.
+    if date_col == "trade_date" and last_date:
+        df.to_csv(csv_path, mode='a', header=False, index=False)
+        return symbol, f"appended {len(df)} rows"
+
+    # Otherwise, rewrite with dedup to handle overlap.
+    try:
+        old = pd.read_csv(csv_path)
+        merged = pd.concat([old, df], ignore_index=True)
+        merged = merged.drop_duplicates()
+        if 'trade_date' in merged.columns:
+            merged = merged.sort_values('trade_date', ascending=True)
+        elif 'end_date' in merged.columns:
+            merged = merged.sort_values('end_date', ascending=True)
+        elif 'ann_date' in merged.columns:
+            merged = merged.sort_values('ann_date', ascending=True)
+        elif 'cal_date' in merged.columns:
+            merged = merged.sort_values('cal_date', ascending=True)
+        merged.to_csv(csv_path, index=False)
+        return symbol, f"updated (+{len(df)} rows, deduped)"
+    except Exception:
+        # Fallback: overwrite
+        df.to_csv(csv_path, index=False)
+        return symbol, f"overwrote {len(df)} rows"
 
 def download_global_data(pro, out_dir: str, dataset: str):
     csv_path = os.path.join(out_dir, f"{dataset}.csv")
-    if os.path.exists(csv_path):
-        print(f"{dataset} already exists at {csv_path}")
-        return
-        
     print(f"Fetching global dataset: {dataset}...")
     max_retries = 5
     for attempt in range(max_retries):
         try:
             api_limiter.wait()
             func = getattr(pro, dataset)
-            df = func()
+            if dataset == 'trade_cal':
+                today_yyyymmdd = datetime.today().strftime("%Y%m%d")
+                end_yyyymmdd = _infer_last_open_trade_date(pro, today_yyyymmdd)
+                start_yyyymmdd = "19900101"
+                if os.path.exists(csv_path):
+                    date_col = _detect_date_col(csv_path) or "cal_date"
+                    last_date = _get_last_date(csv_path, date_col)
+                    if last_date:
+                        try:
+                            last_dt = datetime.strptime(str(last_date), "%Y%m%d")
+                            start_yyyymmdd = (last_dt + timedelta(days=1)).strftime("%Y%m%d")
+                        except Exception:
+                            start_yyyymmdd = str(last_date)
+                df = func(exchange='', start_date=start_yyyymmdd, end_date=end_yyyymmdd)
+            else:
+                df = func()
+
             if df is not None and not df.empty:
-                df.to_csv(csv_path, index=False)
-                print(f"Successfully saved {dataset} to {csv_path}")
+                if os.path.exists(csv_path):
+                    # Append with dedup
+                    try:
+                        old = pd.read_csv(csv_path)
+                        merged = pd.concat([old, df], ignore_index=True).drop_duplicates()
+                        if 'cal_date' in merged.columns:
+                            merged = merged.sort_values('cal_date', ascending=True)
+                        merged.to_csv(csv_path, index=False)
+                        print(f"Successfully updated {dataset} at {csv_path}")
+                    except Exception:
+                        df.to_csv(csv_path, index=False)
+                        print(f"Successfully overwrote {dataset} at {csv_path}")
+                else:
+                    df.to_csv(csv_path, index=False)
+                    print(f"Successfully saved {dataset} to {csv_path}")
             else:
                 print(f"No data returned for {dataset}")
             return
@@ -183,7 +342,11 @@ def main():
         download_global_data(pro, target_dir, args.dataset)
         return
     
-    end_date = args.end_date.strip() or datetime.today().strftime("%Y%m%d")
+    today_yyyymmdd = datetime.today().strftime("%Y%m%d")
+    if args.end_date.strip():
+        end_date = args.end_date.strip()
+    else:
+        end_date = _infer_last_open_trade_date(pro, today_yyyymmdd)
     
     list_path = os.path.join(out_dir, args.list_file)
     if not os.path.exists(list_path):

@@ -9,6 +9,32 @@ import pandas as pd
 import tushare as ts
 import threading
 
+
+def _infer_last_open_trade_date(pro, today_yyyymmdd: str, exchange: str = "SSE", lookback_days: int = 120) -> str:
+    """Return the last open trade date <= today.
+
+    This avoids treating weekends/holidays as missing data.
+    Falls back to today on any error.
+    """
+
+    try:
+        end_dt = datetime.strptime(today_yyyymmdd, "%Y%m%d")
+        start_dt = end_dt - timedelta(days=int(lookback_days))
+        df = pro.trade_cal(exchange=exchange, start_date=start_dt.strftime("%Y%m%d"), end_date=today_yyyymmdd)
+        if df is None or df.empty:
+            return today_yyyymmdd
+        if "is_open" not in df.columns or "cal_date" not in df.columns:
+            return today_yyyymmdd
+
+        open_df = df[df["is_open"].astype(int) == 1]
+        if open_df.empty:
+            return today_yyyymmdd
+
+        v = open_df["cal_date"].max()
+        return str(v)
+    except Exception:
+        return today_yyyymmdd
+
 class RateLimiter:
     def __init__(self, max_calls, period):
         self.max_calls = max_calls
@@ -121,6 +147,10 @@ def download_one_symbol(pro, symbol: str, out_dir: str, start_date: str, end_dat
     # Fetch the three datasets
     df_daily = fetch_data_in_chunks(pro, 'daily', ts_code, fetch_start, end_date)
     if df_daily.empty:
+        # Common case: today is not a trading day (weekend/holiday), so there is
+        # nothing new to append. Treat as up-to-date if we already have history.
+        if last_date:
+            return symbol, "up-to-date"
         return symbol, "no daily data"
         
     df_basic = fetch_data_in_chunks(pro, 'daily_basic', ts_code, fetch_start, end_date)
@@ -174,7 +204,11 @@ def main():
     target_dir = os.path.join(out_dir, "tushare-daily-full")
     os.makedirs(target_dir, exist_ok=True)
     
-    end_date = args.end_date.strip() or datetime.today().strftime("%Y%m%d")
+    today_yyyymmdd = datetime.today().strftime("%Y%m%d")
+    if args.end_date.strip():
+        end_date = args.end_date.strip()
+    else:
+        end_date = _infer_last_open_trade_date(pro, today_yyyymmdd)
     
     if args.symbols.strip():
         symbols = [s.strip() for s in args.symbols.split(",") if s.strip()]

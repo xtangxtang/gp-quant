@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Start gp-quant web UI (defaults to total list).
+# Start the resonance scan dashboard.
 # Usage examples:
 #   ./src/web/start_web.sh
 #   ./src/web/start_web.sh --port 8010
-#   ./src/web/start_web.sh --output-dir /path/to/gp-data --threads 50
+#   ./src/web/start_web.sh --scan-output-dir /nvme5/xtang/gp-workspace/gp-quant/results/multitimeframe_resonance/live_market_scan
 #
 # Defaults (see src/web/app.py):
 #   --host 0.0.0.0
-#   --port 30200
+#   --port 5050
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"

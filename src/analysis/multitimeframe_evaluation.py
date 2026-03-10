@@ -39,6 +39,28 @@ class ResonanceEval:
     n_signals: int
 
 
+@dataclass(frozen=True)
+class SignalSnapshot:
+    signal_date: str | None
+    daily_bar_end: str | None
+    weekly_bar_end: str | None
+    monthly_bar_end: str | None
+    daily_state: bool
+    weekly_state: bool
+    monthly_state: bool
+    resonance_state: bool
+    support_count: int
+    daily_score: float | None
+    weekly_score: float | None
+    monthly_score: float | None
+    resonance_score: float | None
+    energy_term: float | None
+    temperature_term: float | None
+    order_term: float | None
+    phase_term: float | None
+    switch_term: float | None
+
+
 def eval_first_entry_in_year(
     features: pd.DataFrame,
     state_col: str,
@@ -194,6 +216,7 @@ def build_resonance_daily_frame(
     def prep_context(df: pd.DataFrame, prefix: str) -> pd.DataFrame:
         cols = [
             "bar_end_dt",
+            "bar_end",
             "score",
             "score_min_persist",
             "state",
@@ -378,6 +401,46 @@ def eval_first_resonance_in_year(
         ret_to_year_end=float(ret_to_year_end) if np.isfinite(ret_to_year_end) else None,
         max_runup_to_year_end=float(runup) if np.isfinite(runup) else None,
         n_signals=n_signals,
+    )
+
+
+def build_latest_signal_snapshot(
+    daily_resonance: pd.DataFrame,
+    scan_date: str,
+    require_exact_date: bool = True,
+) -> SignalSnapshot | None:
+    if daily_resonance is None or not isinstance(daily_resonance, pd.DataFrame) or daily_resonance.empty:
+        return None
+
+    df = daily_resonance.copy().reset_index(drop=True)
+    df["bar_end"] = df["bar_end"].astype(str)
+    df = df[df["bar_end"] <= str(scan_date)].copy().reset_index(drop=True)
+    if df.empty:
+        return None
+
+    row = df.iloc[-1]
+    if require_exact_date and str(row["bar_end"]) != str(scan_date):
+        return None
+
+    return SignalSnapshot(
+        signal_date=str(row["bar_end"]),
+        daily_bar_end=str(row["bar_end"]),
+        weekly_bar_end=str(row["weekly_bar_end"]) if "weekly_bar_end" in row.index and pd.notna(row["weekly_bar_end"]) else None,
+        monthly_bar_end=str(row["monthly_bar_end"]) if "monthly_bar_end" in row.index and pd.notna(row["monthly_bar_end"]) else None,
+        daily_state=bool(row["daily_state"]) if pd.notna(row["daily_state"]) else False,
+        weekly_state=bool(row["weekly_state"]) if pd.notna(row["weekly_state"]) else False,
+        monthly_state=bool(row["monthly_state"]) if pd.notna(row["monthly_state"]) else False,
+        resonance_state=bool(row["resonance_state"]) if pd.notna(row["resonance_state"]) else False,
+        support_count=int(row["support_count"]) if pd.notna(row["support_count"]) else 0,
+        daily_score=float(row["daily_score_ctx"]) if np.isfinite(row["daily_score_ctx"]) else None,
+        weekly_score=float(row["weekly_score_ctx"]) if np.isfinite(row["weekly_score_ctx"]) else None,
+        monthly_score=float(row["monthly_score_ctx"]) if np.isfinite(row["monthly_score_ctx"]) else None,
+        resonance_score=float(row["resonance_score"]) if np.isfinite(row["resonance_score"]) else None,
+        energy_term=float(row["energy_term"]) if np.isfinite(row["energy_term"]) else None,
+        temperature_term=float(row["temperature_term"]) if np.isfinite(row["temperature_term"]) else None,
+        order_term=float(row["order_term"]) if np.isfinite(row["order_term"]) else None,
+        phase_term=float(row["phase_term"]) if np.isfinite(row["phase_term"]) else None,
+        switch_term=float(row["switch_term"]) if np.isfinite(row["switch_term"]) else None,
     )
 
 

@@ -45,6 +45,12 @@ def clip_term(values: np.ndarray | pd.Series, scale: float) -> np.ndarray:
     return np.clip(arr / float(scale), -1.0, 1.0)
 
 
+def _numeric_series_or_default(df: pd.DataFrame, column: str, default: float = 0.0) -> pd.Series:
+    if column in df.columns:
+        return pd.to_numeric(df[column], errors="coerce").fillna(default)
+    return pd.Series(default, index=df.index, dtype="float64")
+
+
 def build_daily_bars(df_daily: pd.DataFrame) -> pd.DataFrame:
     df = to_trade_date_str(df_daily.copy())
     if df.empty:
@@ -58,9 +64,9 @@ def build_daily_bars(df_daily: pd.DataFrame) -> pd.DataFrame:
     if "open" not in df.columns or "close" not in df.columns:
         return pd.DataFrame()
 
-    df["amount"] = pd.to_numeric(df.get("amount", 0.0), errors="coerce").fillna(0.0)
-    df["turnover_rate"] = pd.to_numeric(df.get("turnover_rate", 0.0), errors="coerce").fillna(0.0)
-    df["net_mf_amount"] = pd.to_numeric(df.get("net_mf_amount", 0.0), errors="coerce").fillna(0.0)
+    df["amount"] = _numeric_series_or_default(df, "amount", 0.0)
+    df["turnover_rate"] = _numeric_series_or_default(df, "turnover_rate", 0.0)
+    df["net_mf_amount"] = _numeric_series_or_default(df, "net_mf_amount", 0.0)
 
     bars = pd.DataFrame(
         {
@@ -98,9 +104,9 @@ def aggregate_stock_bars(df_daily: pd.DataFrame, freq: str) -> pd.DataFrame:
     if "open" not in df.columns or "close" not in df.columns:
         return pd.DataFrame()
 
-    df["amount"] = pd.to_numeric(df.get("amount", 0.0), errors="coerce").fillna(0.0)
-    df["turnover_rate"] = pd.to_numeric(df.get("turnover_rate", 0.0), errors="coerce").fillna(0.0)
-    df["net_mf_amount"] = pd.to_numeric(df.get("net_mf_amount", 0.0), errors="coerce").fillna(0.0)
+    df["amount"] = _numeric_series_or_default(df, "amount", 0.0)
+    df["turnover_rate"] = _numeric_series_or_default(df, "turnover_rate", 0.0)
+    df["net_mf_amount"] = _numeric_series_or_default(df, "net_mf_amount", 0.0)
 
     if freq == "W":
         df["period"] = df["dt"].dt.to_period("W-FRI")

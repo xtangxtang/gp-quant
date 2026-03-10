@@ -39,10 +39,10 @@ gp-quant/
 - `phase`：熵、Hurst 指数等秩序变化
 - `switch`：从混沌向有序切换的触发项
 
-最终输出两类结果：
+最终输出的核心是“扫描日市场快照 + 当日共振候选股列表”：
 
-- 单周期首信号评估：日 / 周 / 月分别看首次触发后的年内表现
-- 多周期共振评估：把日线触发与周线、月线支持合并，评估共振后的收益与回撤空间
+- 市场快照：对全市场逐只股票给出扫描日当天的日 / 周 / 月状态与共振分数
+- 候选股列表：仅保留扫描日当天满足多周期共振条件的股票，并按共振强度排序
 
 ## 环境依赖
 
@@ -127,15 +127,33 @@ pip install -r requirements.txt
 
 默认行为：
 
-- 扫描年份：`2025`
-- 输出目录：`results/multitimeframe_resonance/out_2025_multitimeframe_fullscan`
-- 从全市场按年内涨幅排序，取前 `300` 只做详细多周期扫描
+- 自动推断数据中的最新交易日作为 `scan_date`
+- 输出目录：`results/multitimeframe_resonance/live_market_scan`
+- 对全市场所有股票直接做扫描日可见信息下的多周期共振排序
+- 默认推荐参数：`top_n=30`、`min_amount=500000`、`min_turnover=1.0`、`resonance_min_count=2`、`hold_days=5`、`max_positions=10`、`max_positions_per_industry=2`
 
 常见用法：
 
 ```bash
-# 指定年份
-./scripts/run_multitimeframe_resonance_scan.sh --test-year 2024
+# 指定扫描日
+./scripts/run_multitimeframe_resonance_scan.sh --scan-date 20260309
+
+# 追加流动性 / ST / 组合层约束
+./scripts/run_multitimeframe_resonance_scan.sh \
+    --scan-date 20260309 \
+    --min-amount 500000 \
+    --min-turnover 1.0 \
+    --hold-days 5 \
+    --max-positions 10 \
+    --max-positions-per-industry 2 \
+    --resonance_min_count 2
+
+# 做一个短窗口前瞻回测
+./scripts/run_multitimeframe_resonance_scan.sh \
+    --backtest-start-date 20260201 \
+    --backtest-end-date 20260309 \
+    --hold-days 5 \
+    --max-positions 10
 
 # 小样本 smoke test
 ./scripts/run_multitimeframe_resonance_scan.sh \
@@ -154,7 +172,7 @@ pip install -r requirements.txt
 python src/analysis/run_multitimeframe_resonance_scan.py \
     --data_dir /nvme5/xtang/gp-workspace/gp-data/tushare-daily-full \
     --out_dir /tmp/gp_quant_resonance_smoke \
-    --test_year 2025 \
+    --scan_date 20260309 \
     --symbols sh600000,sz000001,sh601398 \
     --basic_path /nvme5/xtang/gp-workspace/gp-data/tushare_stock_basic.csv
 ```
@@ -167,20 +185,31 @@ python src/analysis/run_multitimeframe_resonance_scan.py \
 
 常见输出文件：
 
-- `bull_stocks_<year>_all.csv`
-- `bull_stocks_<year>_top<top_n>.csv`
-- `multitimeframe_entry_eval_<year>.csv`
-- `multitimeframe_entry_eval_<year>_agg.csv`
-- `multitimeframe_resonance_eval_<year>.csv`
-- `multitimeframe_resonance_eval_<year>_agg.csv`
-- `multitimeframe_resonance_signals_<year>.csv`
+- `market_scan_snapshot_<scan_date>.csv`
+- `resonance_candidates_<scan_date>_all.csv`
+- `resonance_candidates_<scan_date>_top<top_n>.csv`
+- `selected_portfolio_<scan_date>_top<top_n>.csv`
+- `resonance_summary_<scan_date>.csv`
+- `forward_backtest_daily_<scan_date>.csv`
+- `forward_backtest_trades_<scan_date>.csv`
+- `forward_backtest_summary_<scan_date>.csv`
 
 含义大致为：
 
-- `bull_stocks_*`：年内涨幅排序及入选详细扫描的股票池
-- `entry_eval_*`：单周期信号评估结果
-- `resonance_eval_*`：多周期共振首信号评估结果
-- `resonance_signals_*`：年内所有共振信号明细
+- `market_scan_snapshot_*`：全市场扫描日状态快照，包含日 / 周 / 月与共振分数
+- `resonance_candidates_*_all`：扫描日满足共振条件的全部候选股
+- `resonance_candidates_*_topN`：按共振强度排序后的前 N 只候选股
+- `selected_portfolio_*_topN`：叠加流动性 / ST / 组合容量约束后的最终入选名单
+- `max_positions_per_industry > 0` 时，会额外限制单一行业入选数量，降低主题扎堆
+- `resonance_summary_*`：扫描日统计汇总
+- `forward_backtest_daily_*`：按扫描日滚动生成的每日选股数量统计
+- `forward_backtest_trades_*`：前瞻回测逐笔交易结果
+- `forward_backtest_summary_*`：前瞻回测摘要指标
+
+现在扫描和回测结果里还会携带：
+
+- `industry` / `market` / `area`：来自 `tushare_stock_basic.csv` 的行业、板块与地域信息
+- `nav` / `strategy_daily_return`：前瞻回测日度净值与当日组合收益
 
 ## analysis 模块说明
 
@@ -197,10 +226,26 @@ python src/analysis/run_multitimeframe_resonance_scan.py \
 
 ## Web 模块
 
-`src/web/` 目录仍然保留，用于轻量页面或数据浏览实验，但它不是当前仓库的主分析入口。当前正式研究与生产输出，默认都走：
+`src/web/` 现在提供一个轻量 dashboard，用来直接浏览扫描 CSV、手动加过滤条件，以及联动查看前瞻回测摘要和净值曲线。页面支持：
+
+- 按行业 / 市场 / 地域过滤
+- 按成交额 / 换手率 / 共振分 / 支撑数过滤
+- 查看入选组合、候选池、全市场快照和逐笔交易
+
+当前正式研究与生产输出，默认都走：
 
 - 数据下载：`scripts/run_get_tushare_*.sh`
 - 分析扫描：`scripts/run_multitimeframe_resonance_scan.sh`
+
+启动 Web：
+
+```bash
+/root/miniforge3/bin/conda run -p /root/miniforge3 --no-capture-output python \
+    /root/.vscode-server/extensions/ms-python.python-2026.2.0-linux-x64/python_files/get_output_via_markers.py \
+    src/web/app.py \
+    --scan-output-dir /nvme5/xtang/gp-workspace/gp-quant/results/multitimeframe_resonance/live_market_scan \
+    --port 5050
+```
 
 ## 建议工作流
 

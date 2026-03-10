@@ -1,1358 +1,1212 @@
 import argparse
-import csv
-import json
-import os
-import sys
-import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import glob
+from pathlib import Path
 
+import pandas as pd
 from flask import Flask, jsonify, request
 
 
-STOCK_PAGE_HTML = """<!doctype html>
-<html lang=\"zh\">
+DEFAULT_SCAN_OUTPUT_DIR = Path(__file__).resolve().parents[2] / "results" / "multitimeframe_resonance" / "live_market_scan"
+
+
+DASHBOARD_HTML = """<!doctype html>
+<html lang="zh-CN">
 <head>
-  <meta charset=\"utf-8\" />
-  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
-  <title>gp-quant - 分钟轨迹</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>gp-quant Resonance Dashboard</title>
   <style>
-    :root { color-scheme: dark; }
-    body { background: #0f1115; color: #eaeaea; font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; margin: 16px; }
-    a { color: #ffffff; text-decoration: none; }
-    a:hover { text-decoration: underline; }
-    .bar { display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-bottom:12px; }
-    .muted { color: #a0a0a0; font-size: 12px; }
-    .panel { border: 1px solid #2a2f3a; background: #121622; padding: 10px; }
-    canvas { width: 100%; max-width: 1170px; height: auto; display:block; }
-    .sep { height: 10px; }
-    .err { color: #b00020; }
+    :root {
+      --paper: #f6f0e7;
+      --ink: #172121;
+      --muted: #58636b;
+      --card: rgba(255,255,255,0.74);
+      --line: rgba(23,33,33,0.12);
+      --accent: #c84c2f;
+      --accent-strong: #9f3219;
+      --good: #1f7a4c;
+      --warn: #ad7a14;
+      --bad: #a63f3f;
+      --shadow: 0 18px 60px rgba(41, 34, 24, 0.12);
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at top left, rgba(245, 201, 168, 0.85), transparent 28%),
+        radial-gradient(circle at right 20%, rgba(200, 76, 47, 0.12), transparent 22%),
+        linear-gradient(180deg, #f8efe3 0%, #efe3d2 48%, #f5efe7 100%);
+      font-family: Georgia, "Noto Serif SC", "Source Han Serif SC", serif;
+      min-height: 100vh;
+    }
+
+    .shell {
+      max-width: 1520px;
+      margin: 0 auto;
+      padding: 28px 20px 48px;
+    }
+
+    .hero {
+      display: grid;
+      grid-template-columns: 1.25fr 0.95fr;
+      gap: 18px;
+      margin-bottom: 18px;
+    }
+
+    .hero-card,
+    .panel {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(12px);
+    }
+
+    .hero-card {
+      padding: 24px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .hero-card::after {
+      content: "";
+      position: absolute;
+      right: -24px;
+      top: -24px;
+      width: 180px;
+      height: 180px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(200, 76, 47, 0.18), transparent 68%);
+    }
+
+    .eyebrow {
+      font-size: 12px;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--accent-strong);
+      margin-bottom: 10px;
+    }
+
+    h1 {
+      margin: 0 0 10px;
+      font-size: clamp(32px, 5vw, 56px);
+      line-height: 0.96;
+      font-weight: 700;
+    }
+
+    .hero-copy {
+      max-width: 720px;
+      color: var(--muted);
+      font-size: 16px;
+      line-height: 1.6;
+      margin-bottom: 20px;
+    }
+
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .metric {
+      padding: 14px 14px 12px;
+      background: rgba(255,255,255,0.58);
+      border: 1px solid rgba(23,33,33,0.08);
+      border-radius: 16px;
+    }
+
+    .metric-label {
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 6px;
+    }
+
+    .metric-value {
+      font-size: 26px;
+      font-weight: 700;
+      line-height: 1;
+    }
+
+    .hero-side {
+      display: grid;
+      gap: 18px;
+    }
+
+    .panel {
+      padding: 18px;
+    }
+
+    .panel-title {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+
+    .panel-title h2,
+    .panel-title h3 {
+      margin: 0;
+      font-size: 18px;
+    }
+
+    .stamp {
+      font-size: 12px;
+      color: var(--accent-strong);
+      background: rgba(245, 201, 168, 0.45);
+      padding: 6px 10px;
+      border-radius: 999px;
+      white-space: nowrap;
+    }
+
+    .toolbar {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+
+    label {
+      display: block;
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+
+    input, select {
+      width: 100%;
+      border: 1px solid rgba(23,33,33,0.14);
+      background: rgba(255,255,255,0.84);
+      color: var(--ink);
+      border-radius: 12px;
+      padding: 10px 12px;
+      font: inherit;
+    }
+
+    .toolbar-actions {
+      display: flex;
+      align-items: end;
+      gap: 10px;
+    }
+
+    .preset-card {
+      margin-top: 12px;
+      padding: 14px 16px;
+      border-radius: 16px;
+      border: 1px solid rgba(23,33,33,0.10);
+      background: rgba(255,255,255,0.52);
+    }
+
+    .preset-title {
+      font-size: 12px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--accent-strong);
+      margin-bottom: 8px;
+    }
+
+    .preset-copy {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.6;
+      margin-bottom: 10px;
+    }
+
+    .preset-tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .preset-tag {
+      padding: 6px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      color: var(--ink);
+      background: rgba(245, 201, 168, 0.42);
+      border: 1px solid rgba(200, 76, 47, 0.16);
+    }
+
+    button {
+      border: 0;
+      border-radius: 999px;
+      padding: 11px 16px;
+      cursor: pointer;
+      font: inherit;
+      transition: transform 180ms ease, background 180ms ease;
+    }
+
+    button:hover { transform: translateY(-1px); }
+    .btn-primary { background: var(--accent); color: #fff8f1; }
+    .btn-secondary {
+      background: rgba(255,255,255,0.74);
+      color: var(--ink);
+      border: 1px solid rgba(23,33,33,0.12);
+    }
+
+    .content-grid {
+      display: grid;
+      grid-template-columns: 1.15fr 0.85fr;
+      gap: 18px;
+    }
+
+    .table-wrap {
+      overflow: auto;
+      border-radius: 18px;
+      border: 1px solid rgba(23,33,33,0.08);
+      background: rgba(255,255,255,0.45);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 1160px;
+      font-size: 13px;
+    }
+
+    th, td {
+      padding: 10px 12px;
+      border-bottom: 1px solid rgba(23,33,33,0.08);
+      text-align: left;
+      white-space: nowrap;
+    }
+
+    thead th {
+      position: sticky;
+      top: 0;
+      background: #f3eadf;
+      z-index: 1;
+    }
+
+    tbody tr:hover { background: rgba(245, 201, 168, 0.18); }
+
+    .tabs {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 12px;
+      flex-wrap: wrap;
+    }
+
+    .tab {
+      padding: 9px 14px;
+      border-radius: 999px;
+      border: 1px solid rgba(23,33,33,0.1);
+      background: rgba(255,255,255,0.72);
+      cursor: pointer;
+      color: var(--muted);
+    }
+
+    .tab.active {
+      background: var(--ink);
+      color: #f8efe3;
+      border-color: var(--ink);
+    }
+
+    .list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .list-item {
+      padding: 12px 14px;
+      border-radius: 16px;
+      background: rgba(255,255,255,0.56);
+      border: 1px solid rgba(23,33,33,0.08);
+    }
+
+    .kicker {
+      display: inline-block;
+      padding: 4px 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      margin-bottom: 8px;
+    }
+
+    .kicker.good { background: rgba(31,122,76,0.12); color: var(--good); }
+    .kicker.warn { background: rgba(173,122,20,0.14); color: var(--warn); }
+    .kicker.bad { background: rgba(166,63,63,0.12); color: var(--bad); }
+
+    .chart-wrap {
+      border-radius: 18px;
+      border: 1px solid rgba(23,33,33,0.08);
+      background: rgba(255,255,255,0.42);
+      padding: 12px;
+    }
+
+    svg { width: 100%; height: auto; display: block; }
+
+    .chart-caption {
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 6px;
+    }
+
+    .empty {
+      padding: 22px;
+      border-radius: 16px;
+      background: rgba(255,255,255,0.5);
+      border: 1px dashed rgba(23,33,33,0.18);
+      color: var(--muted);
+      text-align: center;
+    }
+
+    @media (max-width: 1180px) {
+      .hero,
+      .content-grid { grid-template-columns: 1fr; }
+      .toolbar { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+
+    @media (max-width: 720px) {
+      .shell { padding: 18px 14px 32px; }
+      .toolbar { grid-template-columns: 1fr; }
+      .summary-grid { grid-template-columns: 1fr 1fr; }
+      .toolbar-actions { align-items: stretch; }
+      .toolbar-actions button { width: 100%; }
+    }
   </style>
 </head>
 <body>
-  <div class=\"bar\">
-    <div><a href=\"/\">返回</a></div>
-    <div><strong id=\"title\">分钟轨迹</strong></div>
-    <div class=\"muted\" id=\"subtitle\"></div>
+  <div class="shell">
+    <section class="hero">
+      <article class="hero-card">
+        <div class="eyebrow">Multitimeframe Resonance</div>
+        <h1>Live Scan<br/>Control Room</h1>
+        <div class="hero-copy">直接查看实时扫描结果、按行业 / 市场 / 地域和流动性二次过滤、检查当天入选组合，并联动查看前瞻回测净值曲线和逐笔交易结果。当前推荐参数基线为成交额 ≥ 50 万、换手率 ≥ 1%、共振支撑数 ≥ 2、最多持有 10 只且单行业不超过 2 只。</div>
+        <div class="summary-grid">
+          <div class="metric"><div class="metric-label">扫描日期</div><div class="metric-value" id="metric-scan-date">-</div></div>
+          <div class="metric"><div class="metric-label">候选数</div><div class="metric-value" id="metric-candidates">0</div></div>
+          <div class="metric"><div class="metric-label">入选数</div><div class="metric-value" id="metric-selected">0</div></div>
+          <div class="metric"><div class="metric-label">组合净值</div><div class="metric-value" id="metric-nav">1.00</div></div>
+        </div>
+      </article>
+
+      <div class="hero-side">
+        <section class="panel">
+          <div class="panel-title">
+            <h2>过滤器</h2>
+            <div class="stamp" id="status-stamp">Ready</div>
+          </div>
+          <div class="toolbar">
+            <div>
+              <label for="scan-date">扫描日期</label>
+              <select id="scan-date"></select>
+            </div>
+            <div>
+              <label for="name-query">名称 / 代码</label>
+              <input id="name-query" placeholder="如 600000 或 银行" />
+            </div>
+            <div>
+              <label for="industry-filter">行业</label>
+              <select id="industry-filter"><option value="">全部行业</option></select>
+            </div>
+            <div>
+              <label for="market-filter">市场</label>
+              <select id="market-filter"><option value="">全部市场</option></select>
+            </div>
+            <div>
+              <label for="area-filter">地域</label>
+              <select id="area-filter"><option value="">全部地域</option></select>
+            </div>
+            <div>
+              <label for="include-st">ST 股票</label>
+              <select id="include-st">
+                <option value="0">排除</option>
+                <option value="1">包含</option>
+              </select>
+            </div>
+          </div>
+          <div class="toolbar">
+            <div>
+              <label for="min-score">最低共振分</label>
+              <input id="min-score" type="number" step="0.01" value="0" />
+            </div>
+            <div>
+              <label for="min-amount">最低成交额</label>
+              <input id="min-amount" type="number" step="100000" value="500000" />
+            </div>
+            <div>
+              <label for="min-turnover">最低换手率</label>
+              <input id="min-turnover" type="number" step="0.01" value="1.0" />
+            </div>
+            <div>
+              <label for="support-count">最低共振支撑数</label>
+              <select id="support-count">
+                <option value="0">不限</option>
+                <option value="2" selected>2</option>
+                <option value="3">3</option>
+              </select>
+            </div>
+            <div>
+              <label for="table-limit">显示行数</label>
+              <input id="table-limit" type="number" min="10" step="10" value="100" />
+            </div>
+            <div class="toolbar-actions">
+              <button class="btn-primary" id="refresh-btn">刷新</button>
+              <button class="btn-secondary" id="preset-btn">恢复推荐参数</button>
+              <button class="btn-secondary" id="reset-btn">清空过滤</button>
+            </div>
+          </div>
+          <div class="preset-card">
+            <div class="preset-title">Recommended Preset</div>
+            <div class="preset-copy">当前推荐基线来自最近短窗和 3 个月前瞻回测的共同结果，优先兼顾候选数量、行业分散和组合回撤控制。扫描脚本默认值也已同步到这组参数。</div>
+            <div class="preset-tags">
+              <span class="preset-tag">top_n = 30</span>
+              <span class="preset-tag">min_amount = 500000</span>
+              <span class="preset-tag">min_turnover = 1.0</span>
+              <span class="preset-tag">support_count ≥ 2</span>
+              <span class="preset-tag">hold_days = 5</span>
+              <span class="preset-tag">max_positions = 10</span>
+              <span class="preset-tag">per_industry = 2</span>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-title">
+            <h3>前瞻回测</h3>
+            <div class="stamp" id="backtest-range">-</div>
+          </div>
+          <div class="list" id="backtest-summary"></div>
+          <div class="chart-wrap" style="margin-top:12px;">
+            <svg id="nav-chart" viewBox="0 0 520 220" preserveAspectRatio="none"></svg>
+            <div class="chart-caption" id="nav-caption">暂无净值曲线</div>
+          </div>
+        </section>
+      </div>
+    </section>
+
+    <section class="content-grid">
+      <section class="panel">
+        <div class="panel-title">
+          <h2>扫描结果</h2>
+          <div class="stamp" id="table-stamp">selected</div>
+        </div>
+        <div class="tabs">
+          <button class="tab active" data-view="selected">入选组合</button>
+          <button class="tab" data-view="candidates">候选池</button>
+          <button class="tab" data-view="market">全市场快照</button>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead id="table-head"></thead>
+            <tbody id="table-body"></tbody>
+          </table>
+        </div>
+        <div class="empty" id="table-empty" hidden>当前过滤条件下没有记录。</div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-title">
+          <h2>交易明细</h2>
+          <div class="stamp" id="trade-count">0 trades</div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead id="trade-head"></thead>
+            <tbody id="trade-body"></tbody>
+          </table>
+        </div>
+        <div class="empty" id="trade-empty" hidden>当前扫描日期没有回测交易明细。</div>
+      </section>
+    </section>
+
+    <section class="panel" style="margin-top:18px;">
+      <div class="panel-title">
+        <h2>行业分组统计</h2>
+        <div class="stamp" id="industry-stamp">0 industries</div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead id="industry-head"></thead>
+          <tbody id="industry-body"></tbody>
+        </table>
+      </div>
+      <div class="chart-caption">行业净值贡献按每笔交易等权占用一个持仓槽位近似计算，即 `sum(return_pct / max_positions)`。</div>
+      <div class="empty" id="industry-empty" hidden>当前过滤条件下没有行业统计结果。</div>
+    </section>
   </div>
 
-  <div class=\"panel\">
-    <div id=\"status\" class=\"muted\">加载中...</div>
-    <div class=\"sep\"></div>
-    <canvas id=\"kline\" width=\"1170\" height=\"280\"></canvas>
-    <div class=\"sep\"></div>
-    <canvas id=\"turnbar\" width=\"1170\" height=\"160\"></canvas>
-    <div class=\"sep\"></div>
-    <canvas id=\"cv\" width=\"1170\" height=\"440\"></canvas>
-  </div>
+  <script>
+    const recommendedPreset = {
+      nameQuery: '',
+      industry: '',
+      market: '',
+      area: '',
+      minScore: '0',
+      minAmount: '500000',
+      minTurnover: '1.0',
+      supportCount: '2',
+      includeSt: '0',
+      tableLimit: '100'
+    };
 
-<script>
-function qs() { return new URLSearchParams(window.location.search); }
-function getSymbol() {
-  const parts = window.location.pathname.split('/').filter(Boolean);
-  return decodeURIComponent(parts[parts.length - 1] || '');
-}
-function parseTime(s) {
-  if (!s) return null;
-  // 'YYYY-MM-DD HH:MM'
-  const iso = s.replace(' ', 'T') + ':00';
-  const d = new Date(iso);
-  return isNaN(d.getTime()) ? null : d;
-}
-function asNumber(v) {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : NaN;
-}
+    const state = { view: 'selected', scanDate: '', dates: [], options: { industries: [], markets: [], areas: [] } };
 
-function fmtHM(d) {
-  if (!d) return '';
-  const hh = String(d.getHours()).padStart(2, '0');
-  const mm = String(d.getMinutes()).padStart(2, '0');
-  return `${hh}:${mm}`;
-}
+    const tableColumns = {
+      selected: ['selected_rank', 'symbol', 'name', 'industry', 'market', 'resonance_score', 'support_count', 'amount', 'turnover_rate', 'daily_score', 'weekly_score', 'monthly_score', 'index_regime'],
+      candidates: ['symbol', 'name', 'industry', 'market', 'resonance_score', 'support_count', 'amount', 'turnover_rate', 'daily_score', 'weekly_score', 'monthly_score', 'index_regime'],
+      market: ['symbol', 'name', 'industry', 'market', 'area', 'resonance_state', 'support_count', 'resonance_score', 'amount', 'turnover_rate', 'daily_state', 'weekly_state', 'monthly_state', 'index_regime'],
+      trades: ['scan_date', 'symbol', 'name', 'industry', 'entry_date', 'exit_date', 'entry_price', 'exit_price', 'return_pct', 'max_runup_pct'],
+      industryStats: ['industry', 'universe_count', 'candidate_count', 'selected_count', 'avg_resonance_score', 'trade_count', 'avg_trade_return_pct', 'nav_contribution_pct']
+    };
 
-function makeTimeTicks(times, desired) {
-  const t = (times || []).filter(Boolean);
-  const n = t.length;
-  if (n === 0) return [];
-  if (n === 1) return [{ i: 0, label: fmtHM(t[0]) }];
-  const want = Math.max(2, Math.min(10, desired || 6));
-  const t0 = t[0].getTime();
-  const t1 = t[n - 1].getTime();
-  if (!Number.isFinite(t0) || !Number.isFinite(t1)) return [];
+    function fmtValue(value) {
+      if (value === null || value === undefined || value === '') return '-';
+      if (typeof value === 'number') {
+        if (!Number.isFinite(value)) return '-';
+        if (Math.abs(value) >= 1000) return value.toLocaleString('zh-CN', { maximumFractionDigits: 2 });
+        return value.toLocaleString('zh-CN', { maximumFractionDigits: 4 });
+      }
+      return String(value);
+    }
 
-  const used = new Set();
-  const out = [];
-  for (let k = 0; k < want; k++) {
-    const frac = (want === 1) ? 0 : (k / (want - 1));
-    const target = t0 + (t1 - t0) * frac;
-    let bestI = 0;
-    let bestD = Infinity;
-    for (let i = 0; i < n; i++) {
-      const di = Math.abs(t[i].getTime() - target);
-      if (di < bestD) {
-        bestD = di;
-        bestI = i;
+    function setStatus(text) {
+      document.getElementById('status-stamp').textContent = text;
+    }
+
+    function applyRecommendedPreset() {
+      document.getElementById('name-query').value = recommendedPreset.nameQuery;
+      document.getElementById('industry-filter').value = recommendedPreset.industry;
+      document.getElementById('market-filter').value = recommendedPreset.market;
+      document.getElementById('area-filter').value = recommendedPreset.area;
+      document.getElementById('min-score').value = recommendedPreset.minScore;
+      document.getElementById('min-amount').value = recommendedPreset.minAmount;
+      document.getElementById('min-turnover').value = recommendedPreset.minTurnover;
+      document.getElementById('support-count').value = recommendedPreset.supportCount;
+      document.getElementById('include-st').value = recommendedPreset.includeSt;
+      document.getElementById('table-limit').value = recommendedPreset.tableLimit;
+    }
+
+    function clearFilters() {
+      document.getElementById('name-query').value = '';
+      document.getElementById('industry-filter').value = '';
+      document.getElementById('market-filter').value = '';
+      document.getElementById('area-filter').value = '';
+      document.getElementById('min-score').value = '0';
+      document.getElementById('min-amount').value = '0';
+      document.getElementById('min-turnover').value = '0';
+      document.getElementById('support-count').value = '0';
+      document.getElementById('include-st').value = '0';
+      document.getElementById('table-limit').value = '100';
+    }
+
+    function filtersToQuery() {
+      const params = new URLSearchParams();
+      params.set('scan_date', state.scanDate);
+      params.set('view', state.view);
+      params.set('name_query', document.getElementById('name-query').value.trim());
+      params.set('industry', document.getElementById('industry-filter').value || '');
+      params.set('market', document.getElementById('market-filter').value || '');
+      params.set('area', document.getElementById('area-filter').value || '');
+      params.set('min_resonance_score', document.getElementById('min-score').value || '0');
+      params.set('min_amount', document.getElementById('min-amount').value || '0');
+      params.set('min_turnover', document.getElementById('min-turnover').value || '0');
+      params.set('support_count_min', document.getElementById('support-count').value || '0');
+      params.set('include_st', document.getElementById('include-st').value || '0');
+      params.set('limit', document.getElementById('table-limit').value || '100');
+      return params;
+    }
+
+    function renderTable(headId, bodyId, emptyId, columns, rows) {
+      const head = document.getElementById(headId);
+      const body = document.getElementById(bodyId);
+      const empty = document.getElementById(emptyId);
+      head.innerHTML = '';
+      body.innerHTML = '';
+      if (!rows || rows.length === 0) {
+        empty.hidden = false;
+        return;
+      }
+      empty.hidden = true;
+
+      const trHead = document.createElement('tr');
+      columns.forEach((column) => {
+        const th = document.createElement('th');
+        th.textContent = column;
+        trHead.appendChild(th);
+      });
+      head.appendChild(trHead);
+
+      rows.forEach((row) => {
+        const tr = document.createElement('tr');
+        columns.forEach((column) => {
+          const td = document.createElement('td');
+          td.textContent = fmtValue(row[column]);
+          tr.appendChild(td);
+        });
+        body.appendChild(tr);
+      });
+    }
+
+    function renderBacktestSummary(summary) {
+      const host = document.getElementById('backtest-summary');
+      host.innerHTML = '';
+      const items = [
+        ['回测区间', summary.backtest_start_date && summary.backtest_end_date ? `${summary.backtest_start_date} -> ${summary.backtest_end_date}` : '-'],
+        ['持有天数', summary.hold_days ?? '-'],
+        ['最大持仓', summary.max_positions ?? '-'],
+        ['行业上限', summary.max_positions_per_industry ?? 0],
+        ['交易笔数', summary.n_trades ?? 0],
+        ['胜率', summary.win_rate == null ? '-' : `${(summary.win_rate * 100).toFixed(2)}%`],
+        ['累计收益', summary.total_return_pct == null ? '-' : `${summary.total_return_pct.toFixed(2)}%`],
+        ['最大回撤', summary.max_drawdown_pct == null ? '-' : `${summary.max_drawdown_pct.toFixed(2)}%`],
+        ['最终净值', summary.final_nav == null ? '-' : summary.final_nav.toFixed(4)],
+      ];
+      items.forEach(([label, value], idx) => {
+        const div = document.createElement('div');
+        div.className = 'list-item';
+        const tone = idx < 3 ? 'good' : (idx < 6 ? 'warn' : 'bad');
+        div.innerHTML = `<div class="kicker ${tone}">${label}</div><div>${fmtValue(value)}</div>`;
+        host.appendChild(div);
+      });
+      document.getElementById('backtest-range').textContent = summary.backtest_start_date && summary.backtest_end_date ? `${summary.backtest_start_date} - ${summary.backtest_end_date}` : 'No backtest';
+      document.getElementById('metric-nav').textContent = summary.final_nav == null ? '1.00' : Number(summary.final_nav).toFixed(2);
+    }
+
+    function renderNavChart(dailyRows) {
+      const svg = document.getElementById('nav-chart');
+      const caption = document.getElementById('nav-caption');
+      svg.innerHTML = '';
+      if (!dailyRows || dailyRows.length === 0) {
+        caption.textContent = '暂无净值曲线';
+        return;
+      }
+
+      const validRows = dailyRows.filter((row) => Number.isFinite(Number(row.nav)));
+      if (validRows.length === 0) {
+        caption.textContent = '暂无净值曲线';
+        return;
+      }
+
+      const width = 520;
+      const height = 220;
+      const padL = 42;
+      const padR = 18;
+      const padT = 16;
+      const padB = 34;
+      const navValues = validRows.map((row) => Number(row.nav));
+      let minNav = Math.min(...navValues);
+      let maxNav = Math.max(...navValues);
+      if (minNav === maxNav) {
+        minNav -= 0.02;
+        maxNav += 0.02;
+      }
+
+      const xAt = (idx) => padL + (idx / Math.max(1, validRows.length - 1)) * (width - padL - padR);
+      const yAt = (nav) => height - padB - ((nav - minNav) / (maxNav - minNav)) * (height - padT - padB);
+
+      const bg = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+      bg.setAttribute('x', '0');
+      bg.setAttribute('y', '0');
+      bg.setAttribute('width', width);
+      bg.setAttribute('height', height);
+      bg.setAttribute('rx', '18');
+      bg.setAttribute('fill', 'rgba(255,255,255,0.35)');
+      svg.appendChild(bg);
+
+      [minNav, (minNav + maxNav) / 2, maxNav].forEach((value) => {
+        const y = yAt(value);
+        const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        line.setAttribute('x1', padL);
+        line.setAttribute('x2', width - padR);
+        line.setAttribute('y1', y);
+        line.setAttribute('y2', y);
+        line.setAttribute('stroke', 'rgba(23,33,33,0.10)');
+        line.setAttribute('stroke-dasharray', '3 5');
+        svg.appendChild(line);
+
+        const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        text.setAttribute('x', 6);
+        text.setAttribute('y', y + 4);
+        text.setAttribute('font-size', '11');
+        text.setAttribute('fill', '#58636b');
+        text.textContent = value.toFixed(3);
+        svg.appendChild(text);
+      });
+
+      let points = '';
+      validRows.forEach((row, idx) => {
+        points += `${xAt(idx)},${yAt(Number(row.nav))} `;
+      });
+
+      const path = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+      path.setAttribute('fill', 'none');
+      path.setAttribute('stroke', '#c84c2f');
+      path.setAttribute('stroke-width', '3');
+      path.setAttribute('stroke-linecap', 'round');
+      path.setAttribute('stroke-linejoin', 'round');
+      path.setAttribute('points', points.trim());
+      svg.appendChild(path);
+
+      const first = validRows[0];
+      const last = validRows[validRows.length - 1];
+      [
+        [first, 0, '#172121'],
+        [last, validRows.length - 1, '#c84c2f']
+      ].forEach(([row, idx, color]) => {
+        const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        circle.setAttribute('cx', xAt(idx));
+        circle.setAttribute('cy', yAt(Number(row.nav)));
+        circle.setAttribute('r', '4');
+        circle.setAttribute('fill', color);
+        svg.appendChild(circle);
+      });
+
+      const tickIndexes = [0, Math.floor((validRows.length - 1) / 2), validRows.length - 1];
+      [...new Set(tickIndexes)].forEach((idx) => {
+        const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        text.setAttribute('x', xAt(idx));
+        text.setAttribute('y', height - 10);
+        text.setAttribute('font-size', '11');
+        text.setAttribute('text-anchor', 'middle');
+        text.setAttribute('fill', '#58636b');
+        text.textContent = String(validRows[idx].scan_date);
+        svg.appendChild(text);
+      });
+
+      caption.textContent = `${String(first.scan_date)} -> ${String(last.scan_date)}，最终净值 ${Number(last.nav).toFixed(4)}`;
+    }
+
+    function fillSelect(selectId, items, emptyLabel) {
+      const select = document.getElementById(selectId);
+      const currentValue = select.value;
+      select.innerHTML = '';
+      const base = document.createElement('option');
+      base.value = '';
+      base.textContent = emptyLabel;
+      select.appendChild(base);
+      (items || []).forEach((item) => {
+        const option = document.createElement('option');
+        option.value = item;
+        option.textContent = item;
+        select.appendChild(option);
+      });
+      if ([...select.options].some((node) => node.value === currentValue)) {
+        select.value = currentValue;
       }
     }
-    if (used.has(bestI)) continue;
-    used.add(bestI);
-    out.push({ i: bestI, label: fmtHM(t[bestI]) });
-  }
 
-  if (!used.has(0)) out.unshift({ i: 0, label: fmtHM(t[0]) });
-  if (!used.has(n - 1)) out.push({ i: n - 1, label: fmtHM(t[n - 1]) });
-
-  out.sort((a, b) => a.i - b.i);
-  const uniq = [];
-  const seen = new Set();
-  for (const it of out) {
-    if (seen.has(it.i)) continue;
-    seen.add(it.i);
-    uniq.push(it);
-  }
-  return uniq;
-}
-
-function drawTimeRuler(ctx, plotL, plotR, baseY, times, labelColor, borderColor) {
-  const t = (times || []).filter(Boolean);
-  const n = t.length;
-  if (n === 0) return;
-  const ticks = makeTimeTicks(t, 6);
-  if (ticks.length === 0) return;
-
-  const xAt = (i) => {
-    if (n <= 1) return (plotL + plotR) / 2;
-    return plotL + (i / (n - 1)) * (plotR - plotL);
-  };
-
-  ctx.strokeStyle = borderColor;
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(plotL, baseY + 0.5);
-  ctx.lineTo(plotR, baseY + 0.5);
-  ctx.stroke();
-
-  ctx.fillStyle = labelColor;
-  ctx.font = '12px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'top';
-  for (const tk of ticks) {
-    const x = xAt(tk.i);
-    ctx.strokeStyle = borderColor;
-    ctx.beginPath();
-    ctx.moveTo(x, baseY);
-    ctx.lineTo(x, baseY + 6);
-    ctx.stroke();
-    ctx.fillText(tk.label, x, baseY + 8);
-  }
-  ctx.textAlign = 'start';
-  ctx.textBaseline = 'alphabetic';
-}
-
-function drawCandles(canvas, points, meta) {
-  const ctx = canvas.getContext('2d');
-  if (!ctx) return;
-
-  const W = canvas.width;
-  const H = canvas.height;
-  const bg = '#121622';
-  const fg = '#ffffff';
-  const muted = '#a0a0a0';
-  const border = '#2a2f3a';
-  const up = '#ff4d4f';
-  const down = '#7ee787';
-
-  ctx.clearRect(0, 0, W, H);
-  ctx.fillStyle = bg;
-  ctx.fillRect(0, 0, W, H);
-  ctx.strokeStyle = border;
-  ctx.lineWidth = 1;
-  ctx.strokeRect(0.5, 0.5, W - 1, H - 1);
-
-  const padL = 64, padR = 18, padT = 32, padB = 30;
-  const plotL = padL, plotR = W - padR, plotT = padT, plotB = H - padB;
-
-  const rows = points
-    .map(p => ({
-      t: parseTime(p.t),
-      o: asNumber(p.o),
-      h: asNumber(p.h),
-      l: asNumber(p.l),
-      c: asNumber(p.c),
-      ret: asNumber(p.y),
-    }))
-    .filter(p => p.t && !Number.isNaN(p.o) && !Number.isNaN(p.h) && !Number.isNaN(p.l) && !Number.isNaN(p.c) && !Number.isNaN(p.ret));
-  if (rows.length === 0) return;
-
-  const lows = rows.map(r => r.l);
-  const highs = rows.map(r => r.h);
-  let ymin = Math.min(...lows);
-  let ymax = Math.max(...highs);
-  if (ymin === ymax) { ymin -= 1; ymax += 1; }
-  const pad = (ymax - ymin) * 0.03;
-  ymin -= pad;
-  ymax += pad;
-
-  function x2px(i) {
-    if (rows.length <= 1) return (plotL + plotR) / 2;
-    return plotL + (i / (rows.length - 1)) * (plotR - plotL);
-  }
-  function y2py(y) {
-    return plotB - (y - ymin) / (ymax - ymin) * (plotB - plotT);
-  }
-
-  // Axes
-  ctx.strokeStyle = border;
-  ctx.beginPath();
-  ctx.moveTo(plotL + 0.5, plotT);
-  ctx.lineTo(plotL + 0.5, plotB);
-  ctx.lineTo(plotR, plotB + 0.5);
-  ctx.stroke();
-
-  // Title
-  ctx.fillStyle = fg;
-  ctx.font = '700 14px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif';
-  ctx.fillText(meta.title || '1分钟K线', 16, 20);
-  ctx.fillStyle = muted;
-  ctx.font = '12px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif';
-  ctx.fillText(`时间: ${fmtHM(rows[0].t)} ~ ${fmtHM(rows[rows.length - 1].t)}  |  OHLC`, 16, 34);
-
-  // Y ticks
-  const fmtP = (v) => {
-    if (!Number.isFinite(v)) return '';
-    if (Math.abs(v) >= 100) return v.toFixed(2);
-    return v.toFixed(3);
-  };
-  ctx.fillStyle = muted;
-  ctx.font = '12px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif';
-  for (const yt of [ymin, (ymin + ymax) / 2, ymax]) {
-    const py = y2py(yt);
-    ctx.strokeStyle = border;
-    ctx.beginPath();
-    ctx.moveTo(plotL - 6, py + 0.5);
-    ctx.lineTo(plotL, py + 0.5);
-    ctx.stroke();
-    ctx.fillText(fmtP(yt), 10, py + 4);
-  }
-
-  // Candles
-  const span = (plotR - plotL);
-  const candleW = Math.max(2, Math.min(8, Math.floor(span / Math.max(1, rows.length) * 0.6)));
-  ctx.lineWidth = 1;
-  for (let i = 0; i < rows.length; i++) {
-    const r = rows[i];
-    const x = x2px(i);
-    const yO = y2py(r.o);
-    const yC = y2py(r.c);
-    const yH = y2py(r.h);
-    const yL = y2py(r.l);
-    const col = (r.ret > 0) ? up : (r.ret < 0 ? down : fg);
-
-    // wick
-    ctx.strokeStyle = col;
-    ctx.beginPath();
-    ctx.moveTo(x, yH);
-    ctx.lineTo(x, yL);
-    ctx.stroke();
-
-    // body
-    const top = Math.min(yO, yC);
-    const bot = Math.max(yO, yC);
-    const h = Math.max(1.2, bot - top);
-    ctx.fillStyle = col;
-    ctx.fillRect(Math.round(x - candleW / 2), top, candleW, h);
-  }
-
-  // Time ruler (align with other plots)
-  drawTimeRuler(ctx, plotL, plotR, plotB + 2, rows.map(r => r.t), muted, border);
-}
-
-function drawTurnoverBars(canvas, points, meta) {
-  const ctx = canvas.getContext('2d');
-  if (!ctx) return;
-
-  const W = canvas.width;
-  const H = canvas.height;
-  const bg = '#121622';
-  const fg = '#ffffff';
-  const muted = '#a0a0a0';
-  const border = '#2a2f3a';
-  const up = '#ff4d4f';
-  const down = '#7ee787';
-
-  ctx.clearRect(0, 0, W, H);
-  ctx.fillStyle = bg;
-  ctx.fillRect(0, 0, W, H);
-  ctx.strokeStyle = border;
-  ctx.lineWidth = 1;
-  ctx.strokeRect(0.5, 0.5, W - 1, H - 1);
-
-  const padL = 64, padR = 18, padT = 28, padB = 24;
-  const plotL = padL, plotR = W - padR, plotT = padT, plotB = H - padB;
-
-  const rows = points
-    .map(p => ({
-      t: parseTime(p.t),
-      x: asNumber(p.x),
-      y: asNumber(p.y),
-    }))
-    .filter(p => p.t && !Number.isNaN(p.x) && !Number.isNaN(p.y));
-  if (rows.length === 0) return;
-
-  const xs = rows.map(r => r.x);
-  let ymax = Math.max(...xs);
-  if (!Number.isFinite(ymax) || ymax <= 0) ymax = 1;
-
-  function x2px(i) {
-    if (rows.length <= 1) return (plotL + plotR) / 2;
-    return plotL + (i / (rows.length - 1)) * (plotR - plotL);
-  }
-  function v2py(v) {
-    return plotB - (v / ymax) * (plotB - plotT);
-  }
-
-  // Axes
-  ctx.strokeStyle = border;
-  ctx.beginPath();
-  ctx.moveTo(plotL + 0.5, plotT);
-  ctx.lineTo(plotL + 0.5, plotB);
-  ctx.lineTo(plotR, plotB + 0.5);
-  ctx.stroke();
-
-  // Title
-  ctx.fillStyle = fg;
-  ctx.font = '700 14px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif';
-  ctx.fillText(meta.title || '换手率(%)', 16, 18);
-  ctx.fillStyle = muted;
-  ctx.font = '12px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif';
-  ctx.fillText(`时间: ${fmtHM(rows[0].t)} ~ ${fmtHM(rows[rows.length - 1].t)}  |  每分钟换手率柱状图`, 16, 32);
-
-  // Y tick labels (0 and max)
-  const fmtV = (v) => {
-    if (!Number.isFinite(v)) return '';
-    if (v >= 1) return v.toFixed(3);
-    return v.toFixed(4);
-  };
-  ctx.fillStyle = muted;
-  ctx.font = '12px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif';
-  ctx.fillText(fmtV(ymax), 10, plotT + 10);
-  ctx.fillText('0', 10, plotB + 4);
-
-  // Bars
-  const span = (plotR - plotL);
-  const barW = Math.max(1, Math.min(6, Math.floor(span / Math.max(1, rows.length) * 0.7)));
-  for (let i = 0; i < rows.length; i++) {
-    const r = rows[i];
-    const x = x2px(i);
-    const y = v2py(r.x);
-    const col = (r.y > 0) ? up : (r.y < 0 ? down : fg);
-    ctx.fillStyle = col;
-    ctx.fillRect(Math.round(x - barW / 2), y, barW, Math.max(1, plotB - y));
-  }
-
-  // Time ruler (align with other plots)
-  drawTimeRuler(ctx, plotL, plotR, plotB + 2, rows.map(r => r.t), muted, border);
-}
-
-function drawTrajectory(canvas, points, meta) {
-  const ctx = canvas.getContext('2d');
-  if (!ctx) return;
-
-  const W = canvas.width;
-  const H = canvas.height;
-  const bg = '#121622';
-  const fg = '#ffffff';
-  const muted = '#a0a0a0';
-  const border = '#2a2f3a';
-  const up = '#ff4d4f';
-  const down = '#7ee787';
-
-  ctx.clearRect(0, 0, W, H);
-  ctx.fillStyle = bg;
-  ctx.fillRect(0, 0, W, H);
-  ctx.strokeStyle = border;
-  ctx.lineWidth = 1;
-  ctx.strokeRect(0.5, 0.5, W - 1, H - 1);
-
-  const padL = 64, padR = 18, padT = 44, padB = 52;
-  const plotL = padL, plotR = W - padR, plotT = padT, plotB = H - padB;
-
-  // Interpret each minute as a vector v_t=(x_t,y_t), and place vectors head-to-tail.
-  // Vertex path: P_0=(0,0), P_{k+1} = P_k + v_k.
-  const raw = points
-    .map(p => ({
-      t: parseTime(p.t),
-      x: asNumber(p.x),
-      amp: asNumber(p.amp),
-      r: asNumber(p.y),
-      c: asNumber(p.c),
-    }))
-    .filter(p => p.t && !Number.isNaN(p.x) && !Number.isNaN(p.amp) && !Number.isNaN(p.r))
-    .map(p => ({
-      ...p,
-      // Signed amplitude: magnitude reflects intraminute amplitude, sign reflects close return direction.
-      y: (p.r > 0) ? p.amp : (p.r < 0 ? -p.amp : 0),
-    }));
-  if (raw.length === 0) return;
-
-  let cx = 0;
-  let cy = 0;
-  const path = [];
-  path.push({ t: raw[0].t, x: 0, y: 0, r: 0, c: NaN });
-  for (const p of raw) {
-    cx += p.x;
-    cy += p.y;
-    path.push({ t: p.t, x: cx, y: cy, r: p.r, c: p.c });
-  }
-
-  const xs = path.map(p => p.x);
-  const ys = path.map(p => p.y);
-  let xmin = Math.min(...xs), xmax = Math.max(...xs);
-  let ymin = Math.min(...ys), ymax = Math.max(...ys);
-  if (xmin === xmax) { xmin -= 1; xmax += 1; }
-  if (ymin === ymax) { ymin -= 1; ymax += 1; }
-
-  // Center Y around 0 for readability (works well for signed amplitude)
-  const yAbs = Math.max(Math.abs(ymin), Math.abs(ymax));
-  ymin = -yAbs;
-  ymax = yAbs;
-
-  function x2px(x) { return plotL + (x - xmin) / (xmax - xmin) * (plotR - plotL); }
-  function y2py(y) { return plotB - (y - ymin) / (ymax - ymin) * (plotB - plotT); }
-
-  // Axes
-  ctx.strokeStyle = border;
-  ctx.beginPath();
-  ctx.moveTo(plotL + 0.5, plotT);
-  ctx.lineTo(plotL + 0.5, plotB);
-  ctx.lineTo(plotR, plotB + 0.5);
-  ctx.stroke();
-
-  // y=0 line
-  if (ymin < 0 && ymax > 0) {
-    const y0 = y2py(0);
-    ctx.strokeStyle = '#2a2f3a';
-    ctx.setLineDash([4, 4]);
-    ctx.beginPath();
-    ctx.moveTo(plotL, y0 + 0.5);
-    ctx.lineTo(plotR, y0 + 0.5);
-    ctx.stroke();
-    ctx.setLineDash([]);
-  }
-
-  // Labels
-  ctx.fillStyle = fg;
-  ctx.font = '700 16px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif';
-  ctx.fillText(meta.title || '2D 轨迹', 16, 24);
-  ctx.fillStyle = muted;
-  ctx.font = '12px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif';
-  ctx.fillText(`向量首尾相接：P0=(0,0)，每分钟向量叠加（y=振幅% + 涨跌方向）  |  时间: ${fmtHM(raw[0].t)} ~ ${fmtHM(raw[raw.length - 1].t)}` , 16, 40);
-
-  // Ticks (minimal)
-  ctx.fillStyle = muted;
-  const fmt = (v) => {
-    if (!Number.isFinite(v)) return '';
-    const av = Math.abs(v);
-    if (av >= 10) return v.toFixed(2);
-    if (av >= 1) return v.toFixed(3);
-    return v.toFixed(4);
-  };
-  ctx.font = '12px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif';
-  const yTick = [ymin, 0, ymax];
-  for (const yt of yTick) {
-    const py = y2py(yt);
-    ctx.strokeStyle = border;
-    ctx.beginPath();
-    ctx.moveTo(plotL - 6, py + 0.5);
-    ctx.lineTo(plotL, py + 0.5);
-    ctx.stroke();
-    ctx.fillText(fmt(yt), 10, py + 4);
-  }
-
-  // Path: split on large time gaps
-  const GAP_MS = 15 * 60 * 1000;
-  for (let i = 0; i < path.length - 1; i++) {
-    const a = path[i];
-    const b = path[i + 1];
-    if ((b.t.getTime() - a.t.getTime()) > GAP_MS) {
-      continue;
+    async function loadDates() {
+      const resp = await fetch('/api/scan_dates');
+      const payload = await resp.json();
+      state.dates = payload.scan_dates || [];
+      const select = document.getElementById('scan-date');
+      select.innerHTML = '';
+      state.dates.forEach((date) => {
+        const option = document.createElement('option');
+        option.value = date;
+        option.textContent = date;
+        select.appendChild(option);
+      });
+      state.scanDate = payload.latest_scan_date || state.dates[0] || '';
+      select.value = state.scanDate;
     }
-    const ax = x2px(a.x), ay = y2py(a.y);
-    const bx = x2px(b.x), by = y2py(b.y);
-    const col = (b.r > 0) ? up : (b.r < 0 ? down : fg);
-    ctx.strokeStyle = col;
-    ctx.lineWidth = 1.6;
-    ctx.beginPath();
-    ctx.moveTo(ax, ay);
-    ctx.lineTo(bx, by);
-    ctx.stroke();
-  }
 
-  // Start / End markers
-  if (path.length > 0) {
-    const s = path[0];
-    const e = path[path.length - 1];
-    const sx = x2px(s.x), sy = y2py(s.y);
-    const ex = x2px(e.x), ey = y2py(e.y);
+    async function loadFilterOptions() {
+      const resp = await fetch(`/api/filter_options?scan_date=${encodeURIComponent(state.scanDate)}`);
+      const payload = await resp.json();
+      state.options = payload || { industries: [], markets: [], areas: [] };
+      fillSelect('industry-filter', state.options.industries || [], '全部行业');
+      fillSelect('market-filter', state.options.markets || [], '全部市场');
+      fillSelect('area-filter', state.options.areas || [], '全部地域');
+    }
 
-    ctx.fillStyle = fg;
-    ctx.beginPath();
-    ctx.arc(sx, sy, 4, 0, Math.PI * 2);
-    ctx.fill();
+    async function loadSummary() {
+      const params = filtersToQuery();
+      const resp = await fetch(`/api/backtest?${params.toString()}`);
+      const payload = await resp.json();
+      renderBacktestSummary(payload.summary || {});
+      renderNavChart(payload.daily || []);
+      renderTable('trade-head', 'trade-body', 'trade-empty', tableColumns.trades, payload.trades || []);
+      document.getElementById('trade-count').textContent = `${(payload.trades || []).length} trades`;
+    }
 
-    ctx.fillStyle = '#ffffff';
-    ctx.beginPath();
-    ctx.rect(ex - 4, ey - 4, 8, 8);
-    ctx.fill();
-  }
+    async function loadIndustryStats() {
+      const params = filtersToQuery();
+      const resp = await fetch(`/api/industry_stats?${params.toString()}`);
+      const payload = await resp.json();
+      renderTable('industry-head', 'industry-body', 'industry-empty', tableColumns.industryStats, payload.rows || []);
+      document.getElementById('industry-stamp').textContent = `${(payload.rows || []).length} industries`;
+    }
 
-  // Price trend: label each minute's vector endpoint with its close price.
-  // (i=1..path.length-1 corresponds to raw[i-1])
-  const labelFont = '10px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif';
-  ctx.font = labelFont;
-  ctx.textAlign = 'left';
-  ctx.textBaseline = 'middle';
-  for (let i = 1; i < path.length; i++) {
-    const p = path[i];
-    if (!Number.isFinite(p.c)) continue;
-    const px = x2px(p.x);
-    const py = y2py(p.y);
-    const col = (p.r > 0) ? up : (p.r < 0 ? down : fg);
-    const txt = p.c.toFixed(2);
-    // Outline improves readability on colored strokes
-    ctx.lineWidth = 3;
-    ctx.strokeStyle = bg;
-    ctx.strokeText(txt, px + 6, py);
-    ctx.fillStyle = col;
-    ctx.fillText(txt, px + 6, py);
-  }
-}
+    async function loadTable() {
+      const params = filtersToQuery();
+      setStatus('Loading');
+      const resp = await fetch(`/api/scan?${params.toString()}`);
+      const payload = await resp.json();
+      renderTable('table-head', 'table-body', 'table-empty', tableColumns[state.view], payload.rows || []);
+      const summary = payload.summary || {};
+      document.getElementById('metric-scan-date').textContent = state.scanDate || '-';
+      document.getElementById('metric-candidates').textContent = fmtValue(summary.n_resonance_candidates ?? 0);
+      document.getElementById('metric-selected').textContent = fmtValue(summary.n_selected ?? 0);
+      document.getElementById('table-stamp').textContent = `${state.view} / ${payload.row_count || 0}`;
+      setStatus('Synced');
+    }
 
-async function main() {
-  const symbol = getSymbol();
-  const date = qs().get('date') || '';
-  document.getElementById('title').textContent = `分钟轨迹 - ${symbol}`;
-  document.getElementById('subtitle').textContent = date ? (`日期: ${date}`) : '';
+    async function refreshAll() {
+      state.scanDate = document.getElementById('scan-date').value;
+      await loadFilterOptions();
+      await Promise.all([loadTable(), loadSummary(), loadIndustryStats()]);
+    }
 
-  const status = document.getElementById('status');
-  const kline = document.getElementById('kline');
-  const turnbar = document.getElementById('turnbar');
-  const canvas = document.getElementById('cv');
+    function bindEvents() {
+      document.querySelectorAll('.tab').forEach((button) => {
+        button.addEventListener('click', async () => {
+          document.querySelectorAll('.tab').forEach((node) => node.classList.remove('active'));
+          button.classList.add('active');
+          state.view = button.dataset.view;
+          await loadTable();
+        });
+      });
 
-  if (!symbol || !date) {
-    status.textContent = '缺少 symbol 或 date';
-    status.className = 'err';
-    return;
-  }
+      document.getElementById('refresh-btn').addEventListener('click', refreshAll);
+      document.getElementById('preset-btn').addEventListener('click', async () => {
+        applyRecommendedPreset();
+        await refreshAll();
+      });
+      document.getElementById('scan-date').addEventListener('change', refreshAll);
+      document.getElementById('reset-btn').addEventListener('click', async () => {
+        clearFilters();
+        await refreshAll();
+      });
+    }
 
-  status.textContent = '加载中...';
-  const url = `/api/minute_vectors?symbol=${encodeURIComponent(symbol)}&date=${encodeURIComponent(date)}`;
-  const resp = await fetch(url);
-  if (!resp.ok) {
-    status.textContent = '加载失败: ' + resp.status;
-    status.className = 'err';
-    return;
-  }
-  const data = await resp.json();
-  if (!data.ok) {
-    status.textContent = '加载失败: ' + (data.error || 'unknown');
-    status.className = 'err';
-    return;
-  }
-
-  const points = data.points || [];
-  status.textContent = `已加载 ${points.length} 分钟`;
-  status.className = 'muted';
-  drawCandles(kline, points, { title: `1分钟K线 - ${symbol} ${date}` });
-  drawTurnoverBars(turnbar, points, { title: `换手率(%) - ${symbol} ${date}` });
-  drawTrajectory(canvas, points, { title: `${symbol} ${date}` });
-}
-
-main();
-</script>
+    (async function init() {
+      await loadDates();
+      bindEvents();
+      await refreshAll();
+    })();
+  </script>
 </body>
 </html>
 """
 
 
-_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
-if _THIS_DIR not in sys.path:
-    sys.path.insert(0, _THIS_DIR)
-
-from eastmoney_daily import default_data_dir, fetch_latest_daily_summary
-
-
-def _ensure_dir(path: str) -> None:
-  os.makedirs(path, exist_ok=True)
+def _read_csv(path: Path) -> pd.DataFrame:
+    if not path.exists() or path.stat().st_size == 0:
+        return pd.DataFrame()
+    try:
+        return pd.read_csv(path)
+    except pd.errors.EmptyDataError:
+        return pd.DataFrame()
 
 
-def _cache_dir(output_dir: str) -> str:
-  return os.path.join(os.path.abspath(output_dir), "total-daily-view")
+def _scan_dates(output_dir: Path) -> list[str]:
+    pattern = str(output_dir / "market_scan_snapshot_*.csv")
+    dates: list[str] = []
+    for path in glob.glob(pattern):
+        stem = Path(path).stem
+        dates.append(stem.rsplit("_", 1)[-1])
+    return sorted(set(dates), reverse=True)
 
 
-def _parse_cache_date_from_filename(name: str) -> str | None:
-  # YYYY-MM-DD.csv
-  if not name.endswith(".csv"):
+def _resolve_scan_date(output_dir: Path, requested_scan_date: str) -> str:
+    if requested_scan_date:
+        return str(requested_scan_date)
+    dates = _scan_dates(output_dir)
+    if not dates:
+        raise FileNotFoundError(f"No scan outputs found under {output_dir}")
+    return dates[0]
+
+
+def _find_existing(output_dir: Path, patterns: list[str]) -> Path | None:
+    for pattern in patterns:
+        matches = sorted(output_dir.glob(pattern))
+        if matches:
+            return matches[0]
     return None
-  stem = name[:-4]
-  if len(stem) != 10:
-    return None
-  if stem[4] != "-" or stem[7] != "-":
-    return None
-  y, m, d = stem[0:4], stem[5:7], stem[8:10]
-  if not (y.isdigit() and m.isdigit() and d.isdigit()):
-    return None
-  return stem
 
 
-def _find_latest_cache_file(output_dir: str) -> str | None:
-  d = _cache_dir(output_dir)
-  if not os.path.isdir(d):
-    return None
-  best_date = None
-  best_path = None
-  for fn in os.listdir(d):
-    dt = _parse_cache_date_from_filename(fn)
-    if not dt:
-      continue
-    if best_date is None or dt > best_date:
-      best_date = dt
-      best_path = os.path.join(d, fn)
-  return best_path
+def _load_bundle(output_dir: Path, scan_date: str) -> dict[str, pd.DataFrame]:
+    selected_path = _find_existing(output_dir, [f"selected_portfolio_{scan_date}_top*.csv"])
+    return {
+        "market": _read_csv(output_dir / f"market_scan_snapshot_{scan_date}.csv"),
+        "candidates": _read_csv(output_dir / f"resonance_candidates_{scan_date}_all.csv"),
+        "selected": _read_csv(selected_path) if selected_path else pd.DataFrame(),
+        "summary": _read_csv(output_dir / f"resonance_summary_{scan_date}.csv"),
+        "backtest_daily": _read_csv(output_dir / f"forward_backtest_daily_{scan_date}.csv"),
+        "backtest_trades": _read_csv(output_dir / f"forward_backtest_trades_{scan_date}.csv"),
+        "backtest_summary": _read_csv(output_dir / f"forward_backtest_summary_{scan_date}.csv"),
+    }
 
 
-def _load_rows_from_csv(path: str) -> list[dict]:
-  if not path or not os.path.exists(path):
-    return []
-  with open(path, "r", encoding="utf-8") as f:
-    reader = csv.DictReader(f)
-    rows: list[dict] = []
-    for r in reader:
-      if not r:
-        continue
-      rows.append(dict(r))
-    return rows
+def _coerce_numeric(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
+    for column in columns:
+        if column in df.columns:
+            df[column] = pd.to_numeric(df[column], errors="coerce")
+    return df
 
 
-def _save_rows_to_csv(path: str, rows: list[dict]) -> None:
-  _ensure_dir(os.path.dirname(path))
-  fieldnames = [
-    "symbol",
-    "symbol_name",
-    "date",
-    "open",
-    "close",
-    "high",
-    "low",
-    "volume",
-    "amount",
-    "pctchg",
-    "turnover",
-    "chg",
-    "amplitude",
-  ]
-  with open(path, "w", encoding="utf-8", newline="") as f:
-    w = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
-    w.writeheader()
-    for r in rows:
-      w.writerow(r)
+def _apply_filters(df: pd.DataFrame, args: dict[str, str]) -> pd.DataFrame:
+    if df.empty:
+        return df
+
+    out = df.copy()
+    out = _coerce_numeric(
+        out,
+        [
+            "resonance_score",
+            "amount",
+            "turnover_rate",
+            "support_count",
+            "selected_rank",
+            "return_pct",
+            "max_runup_pct",
+            "nav",
+            "strategy_daily_return",
+        ],
+    )
+
+    min_resonance_score = float(args.get("min_resonance_score", 0.0) or 0.0)
+    min_amount = float(args.get("min_amount", 0.0) or 0.0)
+    min_turnover = float(args.get("min_turnover", 0.0) or 0.0)
+    support_count_min = int(args.get("support_count_min", 0) or 0)
+    include_st = str(args.get("include_st", "0")) == "1"
+    name_query = str(args.get("name_query", "")).strip().lower()
+    industry = str(args.get("industry", "")).strip()
+    market = str(args.get("market", "")).strip()
+    area = str(args.get("area", "")).strip()
+    limit = max(1, int(args.get("limit", 100) or 100))
+
+    if min_resonance_score > 0 and "resonance_score" in out.columns:
+        out = out[out["resonance_score"].fillna(-999.0) >= min_resonance_score]
+    if min_amount > 0 and "amount" in out.columns:
+        out = out[out["amount"].fillna(0.0) >= min_amount]
+    if min_turnover > 0 and "turnover_rate" in out.columns:
+        out = out[out["turnover_rate"].fillna(0.0) >= min_turnover]
+    if support_count_min > 0 and "support_count" in out.columns:
+        out = out[out["support_count"].fillna(0) >= support_count_min]
+    if not include_st and "is_st" in out.columns:
+        out = out[~out["is_st"].fillna(False).astype(bool)]
+    if industry and "industry" in out.columns:
+        out = out[out["industry"].fillna("").astype(str) == industry]
+    if market and "market" in out.columns:
+        out = out[out["market"].fillna("").astype(str) == market]
+    if area and "area" in out.columns:
+        out = out[out["area"].fillna("").astype(str) == area]
+    if name_query:
+        name_series = out.get("name", pd.Series(index=out.index, dtype=str)).fillna("").astype(str).str.lower()
+        symbol_series = out.get("symbol", pd.Series(index=out.index, dtype=str)).fillna("").astype(str).str.lower()
+        ts_code_series = out.get("ts_code", pd.Series(index=out.index, dtype=str)).fillna("").astype(str).str.lower()
+        industry_series = out.get("industry", pd.Series(index=out.index, dtype=str)).fillna("").astype(str).str.lower()
+        mask = (
+            name_series.str.contains(name_query, regex=False)
+            | symbol_series.str.contains(name_query, regex=False)
+            | ts_code_series.str.contains(name_query, regex=False)
+            | industry_series.str.contains(name_query, regex=False)
+        )
+        out = out[mask]
+
+    if "selected_rank" in out.columns:
+        out = out.sort_values(["selected_rank"], ascending=[True])
+    elif "nav" in out.columns and "scan_date" in out.columns:
+        out = out.sort_values(["scan_date"], ascending=[True])
+    elif "resonance_score" in out.columns:
+        out = out.sort_values(["resonance_score", "support_count", "amount"], ascending=[False, False, False])
+
+    return out.head(limit).reset_index(drop=True)
 
 
-def _load_symbols_from_file(path: str) -> list[str]:
-    if not os.path.exists(path):
+def _bundle_filter_options(bundle: dict[str, pd.DataFrame]) -> dict[str, list[str]]:
+    source = bundle.get("market", pd.DataFrame())
+    if source.empty:
+        return {"industries": [], "markets": [], "areas": []}
+
+    def _unique_values(column: str) -> list[str]:
+        if column not in source.columns:
+            return []
+        return sorted({str(value) for value in source[column].dropna().astype(str).tolist() if str(value).strip()})
+
+    return {
+        "industries": _unique_values("industry"),
+        "markets": _unique_values("market"),
+        "areas": _unique_values("area"),
+    }
+
+
+def _build_industry_stats(bundle: dict[str, pd.DataFrame], args: dict[str, str]) -> list[dict[str, object]]:
+    filter_args = {**args, "limit": "1000000"}
+    market = _apply_filters(bundle.get("market", pd.DataFrame()), filter_args)
+    candidates = _apply_filters(bundle.get("candidates", pd.DataFrame()), filter_args)
+    selected = _apply_filters(bundle.get("selected", pd.DataFrame()), filter_args)
+    trades = _apply_filters(bundle.get("backtest_trades", pd.DataFrame()), filter_args)
+
+    frames: list[pd.DataFrame] = []
+
+    if not market.empty and "industry" in market.columns:
+        market_stats = (
+            market.groupby("industry", dropna=False)
+            .agg(universe_count=("symbol", "nunique"), avg_resonance_score=("resonance_score", "mean"))
+            .reset_index()
+        )
+        frames.append(market_stats)
+
+    if not candidates.empty and "industry" in candidates.columns:
+        candidate_stats = (
+            candidates.groupby("industry", dropna=False)
+            .agg(candidate_count=("symbol", "nunique"), candidate_avg_resonance_score=("resonance_score", "mean"))
+            .reset_index()
+        )
+        frames.append(candidate_stats)
+
+    if not selected.empty and "industry" in selected.columns:
+        selected_stats = (
+            selected.groupby("industry", dropna=False)
+            .agg(selected_count=("symbol", "nunique"))
+            .reset_index()
+        )
+        frames.append(selected_stats)
+
+    max_positions = 0
+    backtest_summary = bundle.get("backtest_summary", pd.DataFrame())
+    if not backtest_summary.empty and "max_positions" in backtest_summary.columns:
+        max_positions = int(pd.to_numeric(backtest_summary.iloc[0]["max_positions"], errors="coerce") or 0)
+
+    if not trades.empty and "industry" in trades.columns:
+        trade_stats = (
+            trades.groupby("industry", dropna=False)
+            .agg(
+                trade_count=("symbol", "count"),
+                avg_trade_return_pct=("return_pct", "mean"),
+                total_trade_return_pct=("return_pct", "sum"),
+            )
+            .reset_index()
+        )
+        if max_positions > 0:
+            trade_stats["nav_contribution_pct"] = trade_stats["total_trade_return_pct"] / float(max_positions)
+        else:
+            trade_stats["nav_contribution_pct"] = pd.NA
+        frames.append(trade_stats)
+
+    if not frames:
         return []
-    with open(path, "r", encoding="utf-8") as f:
-        obj = json.load(f)
-    if isinstance(obj, list):
-        return [str(x).strip() for x in obj if str(x).strip()]
-    if isinstance(obj, dict) and isinstance(obj.get("symbols"), list):
-        return [str(x).strip() for x in obj["symbols"] if str(x).strip()]
-    return []
+
+    merged = frames[0]
+    for frame in frames[1:]:
+        merged = merged.merge(frame, on="industry", how="outer")
+
+    merged["industry"] = merged["industry"].fillna("未分类")
+    for column in [
+        "candidate_count",
+        "universe_count",
+        "selected_count",
+        "trade_count",
+        "avg_resonance_score",
+        "candidate_avg_resonance_score",
+        "avg_trade_return_pct",
+        "total_trade_return_pct",
+        "nav_contribution_pct",
+    ]:
+        if column not in merged.columns:
+            merged[column] = pd.NA
+
+    merged["avg_resonance_score"] = merged["avg_resonance_score"].where(
+      pd.notna(merged["avg_resonance_score"]),
+      merged["candidate_avg_resonance_score"],
+    )
+    merged["avg_resonance_score"] = merged["candidate_avg_resonance_score"].where(
+      pd.notna(merged["candidate_avg_resonance_score"]),
+      merged["avg_resonance_score"],
+    )
+    merged["universe_count"] = pd.to_numeric(merged["universe_count"], errors="coerce").fillna(0).astype(int)
+    merged["candidate_count"] = pd.to_numeric(merged["candidate_count"], errors="coerce").fillna(0).astype(int)
+    merged["selected_count"] = pd.to_numeric(merged["selected_count"], errors="coerce").fillna(0).astype(int)
+    merged["trade_count"] = pd.to_numeric(merged["trade_count"], errors="coerce").fillna(0).astype(int)
+    merged = merged.drop(columns=["candidate_avg_resonance_score"], errors="ignore")
+    merged = merged.sort_values(
+        ["nav_contribution_pct", "selected_count", "candidate_count", "avg_resonance_score"],
+        ascending=[False, False, False, False],
+        na_position="last",
+    ).reset_index(drop=True)
+    return merged.where(pd.notna(merged), None).to_dict(orient="records")
 
 
-def _resolve_symbol_list(data_dir: str, mode: str) -> tuple[list[str], str]:
-    data_dir = os.path.abspath(data_dir)
-    total_path = os.path.join(data_dir, "total_gplist.json")
-    self_path = os.path.join(data_dir, "self_gplist.json")
-
-    m = (mode or "auto").strip().lower()
-    if m == "total":
-        return _load_symbols_from_file(total_path), total_path
-    if m == "self":
-        return _load_symbols_from_file(self_path), self_path
-
-    # auto
-    if os.path.exists(total_path):
-        syms = _load_symbols_from_file(total_path)
-        if syms:
-            return syms, total_path
-    if os.path.exists(self_path):
-        return _load_symbols_from_file(self_path), self_path
-    return [], ""
-
-
-def create_app(data_dir: str, list_mode: str, threads: int, adj: str) -> Flask:
+def create_app(scan_output_dir: str) -> Flask:
     app = Flask(__name__)
+    output_dir = Path(scan_output_dir).resolve()
 
     @app.get("/")
-    def index():
-        # Single page: fetches JSON from /api/daily_summaries then renders a sortable table.
-        return f"""<!doctype html>
-<html lang=\"zh\">
-<head>
-  <meta charset=\"utf-8\" />
-  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
-  <title>gp-quant - 最近一天交易总结</title>
-  <style>
-    :root {{ color-scheme: dark; }}
-    body {{ background: #0f1115; color: #eaeaea; font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; margin: 16px; }}
-    .bar {{ display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-bottom:12px; }}
-    .muted {{ color: #a0a0a0; font-size: 12px; }}
-    .panel {{ border: 1px solid #2a2f3a; background: #121622; padding: 10px; margin-bottom: 12px; }}
-    .panel-title {{ font-weight: 700; margin-bottom: 8px; }}
-    .stats-img {{ width: 100%; max-width: 1170px; height: auto; display:block; }}
-    a.celllink {{ color: #ffffff; text-decoration: none; }}
-    a.celllink:hover {{ text-decoration: underline; }}
-    table {{ border-collapse: collapse; width: 100%; }}
-    th, td {{ border: 1px solid #2a2f3a; padding: 8px; font-size: 13px; background: #121622; }}
-    th {{ background: #1b1f2a; cursor: pointer; user-select:none; position: sticky; top: 0; }}
-    .right {{ text-align: right; }}
-    .loading {{ padding: 12px 0; }}
-    .err {{ color: #b00020; }}
-    td.fixedcol {{ background: #0f1115; color: #ffffff; font-weight: 600; white-space: nowrap; }}
-    td.fixedwhite {{ color: #ffffff; white-space: nowrap; }}
-    tr.up td:not(.fixedcol) {{ color: #ff4d4f; }}
-    tr.down td:not(.fixedcol) {{ color: #66bb6a; }}
-    tr.flat td:not(.fixedcol) {{ color: #ffffff; }}
-    tr.up td.fixedwhite, tr.down td.fixedwhite, tr.flat td.fixedwhite {{ color: #ffffff; }}
-  </style>
-</head>
-<body>
-  <div class=\"bar\">
-    <div><strong>最近一天交易总结</strong></div>
-    <div class=\"muted\">数据源：东方财富（日线 klt=101）。默认按股票 id 排序；点击表头可排序。</div>
-  </div>
-
-  <div id=\"stats\" class=\"panel\" hidden>
-    <div class=\"panel-title\">市场涨跌分布</div>
-    <img id=\"statsImg\" class=\"stats-img\" alt=\"市场涨跌分布\" />
-    <canvas id=\"statsCanvas\" width=\"1170\" height=\"210\" hidden></canvas>
-  </div>
-
-  <div id=\"status\" class=\"loading\">加载中...</div>
-  <div style=\"overflow:auto; max-height: calc(100vh - 140px);\">
-    <table id=\"tbl\" hidden>
-      <thead>
-        <tr>
-          <th data-key=\"symbol\">股票id</th>
-          <th data-key=\"symbol_name\">股票名</th>
-          <th data-key=\"date\">日期</th>
-          <th class=\"right\" data-key=\"open\">开盘</th>
-          <th class=\"right\" data-key=\"close\">收盘</th>
-          <th class=\"right\" data-key=\"high\">最高</th>
-          <th class=\"right\" data-key=\"low\">最低</th>
-          <th class=\"right\" data-key=\"volume\">成交量(手)</th>
-          <th class=\"right\" data-key=\"amount\">成交额(元)</th>
-          <th class=\"right\" data-key=\"pctchg\">涨跌幅(%)</th>
-          <th class=\"right\" data-key=\"turnover\">换手率(%)</th>
-        </tr>
-      </thead>
-      <tbody></tbody>
-    </table>
-  </div>
-
-<script>
-const state = {{
-  rows: [],
-  sortKey: 'symbol',
-  sortAsc: true,
-}};
-
-function fmt(v) {{
-  if (v === null || v === undefined) return '';
-  if (typeof v === 'number') {{
-    if (!Number.isFinite(v)) return '';
-    return v.toString();
-  }}
-  return String(v);
-}}
-
-function asNumber(v) {{
-  if (v === null || v === undefined || v === '') return NaN;
-  const n = Number(v);
-  return Number.isFinite(n) ? n : NaN;
-}}
-
-function limitPctForSymbol(symbol) {{
-  const s = (symbol || '').toString().toLowerCase();
-  if (s.startsWith('sh688') || s.startsWith('sz300') || s.startsWith('sz301')) return 20;
-  if (s.startsWith('bj')) return 30;
-  return 10;
-}}
-
-function isSuspendedRow(r) {{
-  const v = asNumber(r.volume);
-  if (!Number.isNaN(v) && v === 0) return true;
-  const amt = asNumber(r.amount);
-  if (!Number.isNaN(amt) && amt === 0) return true;
-  return false;
-}}
-
-function computeStats(rows) {{
-  const stats = {{
-    total: 0,
-    nonSuspended: 0,
-    suspended: 0,
-    up: 0,
-    flat: 0,
-    down: 0,
-    limitUp: 0,
-    limitDown: 0,
-    buckets: [
-      {{ key: 'limitUp', label: '涨停', side: 'up', count: 0 }},
-      {{ key: 'gt7', label: '>7', side: 'up', count: 0 }},
-      {{ key: '7_5', label: '7~5', side: 'up', count: 0 }},
-      {{ key: '5_2', label: '5~2', side: 'up', count: 0 }},
-      {{ key: '2_0', label: '2~0', side: 'up', count: 0 }},
-      {{ key: '0', label: '0', side: 'flat', count: 0 }},
-      {{ key: '0_-2', label: '0~-2', side: 'down', count: 0 }},
-      {{ key: '-2_-5', label: '-2~-5', side: 'down', count: 0 }},
-      {{ key: '-5_-7', label: '-5~-7', side: 'down', count: 0 }},
-      {{ key: 'lt-7', label: '-7<', side: 'down', count: 0 }},
-      {{ key: 'limitDown', label: '跌停', side: 'down', count: 0 }},
-    ],
-  }};
-
-  stats.total = rows.length;
-  const bucketIndex = Object.create(null);
-  for (let i = 0; i < stats.buckets.length; i++) bucketIndex[stats.buckets[i].key] = i;
-
-  for (const r of rows) {{
-    if (isSuspendedRow(r)) {{
-      stats.suspended += 1;
-      continue;
-    }}
-
-    const pct = asNumber(r.pctchg);
-    if (Number.isNaN(pct)) continue;
-    stats.nonSuspended += 1;
-
-    const lim = limitPctForSymbol(r.symbol);
-    const tol = 0.05;
-    const isLimitUp = pct >= (lim - tol);
-    const isLimitDown = pct <= (-lim + tol);
-
-    if (isLimitUp) {{
-      stats.limitUp += 1;
-      stats.buckets[bucketIndex['limitUp']].count += 1;
-      stats.up += 1;
-      continue;
-    }}
-    if (isLimitDown) {{
-      stats.limitDown += 1;
-      stats.buckets[bucketIndex['limitDown']].count += 1;
-      stats.down += 1;
-      continue;
-    }}
-
-    if (Math.abs(pct) < 1e-9) {{
-      stats.flat += 1;
-      stats.buckets[bucketIndex['0']].count += 1;
-      continue;
-    }}
-    if (pct > 0) {{
-      stats.up += 1;
-      if (pct > 7) stats.buckets[bucketIndex['gt7']].count += 1;
-      else if (pct > 5) stats.buckets[bucketIndex['7_5']].count += 1;
-      else if (pct > 2) stats.buckets[bucketIndex['5_2']].count += 1;
-      else stats.buckets[bucketIndex['2_0']].count += 1;
-      continue;
-    }}
-
-    // pct < 0
-    stats.down += 1;
-    if (pct < -7) stats.buckets[bucketIndex['lt-7']].count += 1;
-    else if (pct < -5) stats.buckets[bucketIndex['-5_-7']].count += 1;
-    else if (pct < -2) stats.buckets[bucketIndex['-2_-5']].count += 1;
-    else stats.buckets[bucketIndex['0_-2']].count += 1;
-  }}
-
-  return stats;
-}}
-
-function renderStatsImage(stats) {{
-  const root = document.getElementById('stats');
-  const img = document.getElementById('statsImg');
-  const canvas = document.getElementById('statsCanvas');
-  if (!root || !img || !canvas) return;
-  root.hidden = false;
-
-  const W = 1170;
-  const H = 210;
-  const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
-  canvas.width = Math.round(W * dpr);
-  canvas.height = Math.round(H * dpr);
-  const ctx = canvas.getContext('2d');
-  if (!ctx) return;
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-
-  // Colors (match existing page theme)
-  const bg = '#121622';
-  const fg = '#ffffff';
-  const muted = '#a0a0a0';
-  const border = '#2a2f3a';
-  const up = '#ff4d4f';
-  const down = '#66bb6a';
-
-  ctx.clearRect(0, 0, W, H);
-  ctx.fillStyle = bg;
-  ctx.fillRect(0, 0, W, H);
-  ctx.strokeStyle = border;
-  ctx.lineWidth = 1;
-  ctx.strokeRect(0.5, 0.5, W - 1, H - 1);
-
-  ctx.fillStyle = fg;
-  ctx.font = '700 18px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif';
-  ctx.fillText('市场涨跌分布', 18, 28);
-  ctx.fillStyle = muted;
-  ctx.font = '12px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif';
-  ctx.fillText('基于当前列表样本统计', 18, 48);
-
-  let maxCount = 0;
-  for (const b of stats.buckets) {{
-    if (typeof b.count === 'number' && b.count > maxCount) maxCount = b.count;
-  }}
-
-  const chartLeft = 18;
-  const chartRight = W - 18;
-  const chartTop = 68;
-  const chartBottom = 140;
-  const labelY = 160;
-  const step = (chartRight - chartLeft) / stats.buckets.length;
-  const barW = Math.min(30, Math.max(12, Math.floor(step * 0.58)));
-
-  // Baseline
-  ctx.strokeStyle = border;
-  ctx.beginPath();
-  ctx.moveTo(chartLeft, chartBottom + 0.5);
-  ctx.lineTo(chartRight, chartBottom + 0.5);
-  ctx.stroke();
-
-  // Bars + counts + labels
-  for (let i = 0; i < stats.buckets.length; i++) {{
-    const b = stats.buckets[i];
-    const cx = chartLeft + step * (i + 0.5);
-    const x = Math.round(cx - barW / 2);
-    const ratio = maxCount > 0 ? (b.count / maxCount) : 0;
-    const h = Math.round((chartBottom - chartTop) * ratio);
-    const y = chartBottom - h;
-
-    const color = (b.side === 'up') ? up : (b.side === 'down' ? down : fg);
-    ctx.fillStyle = color;
-    ctx.fillRect(x, y, barW, Math.max(2, h));
-
-    // count text
-    ctx.font = '700 13px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif';
-    ctx.fillStyle = color;
-    const cnt = String(b.count);
-    const tw = ctx.measureText(cnt).width;
-    ctx.fillText(cnt, Math.round(cx - tw / 2), y - 6);
-
-    // label
-    ctx.font = '12px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif';
-    ctx.fillStyle = muted;
-    const lab = String(b.label);
-    const lw = ctx.measureText(lab).width;
-    ctx.fillText(lab, Math.round(cx - lw / 2), labelY);
-  }}
-
-  // Summary line (colored segments)
-  const segs = [
-    {{ t: `上涨 ${{stats.up}}家`, c: up }},
-    {{ t: `平盘 ${{stats.flat}}家`, c: fg }},
-    {{ t: `下跌 ${{stats.down}}家`, c: down }},
-    {{ t: `涨停 ${{stats.limitUp}}家`, c: up }},
-    {{ t: `停牌 ${{stats.suspended}}家`, c: muted }},
-    {{ t: `跌停 ${{stats.limitDown}}家`, c: down }},
-  ];
-  ctx.font = '13px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif';
-  let x = 18;
-  const y = 192;
-  for (const s of segs) {{
-    ctx.fillStyle = s.c;
-    ctx.fillText(s.t, x, y);
-    x += ctx.measureText(s.t).width + 18;
-  }}
-
-  img.src = canvas.toDataURL('image/png');
-}}
-
-function renderStats(stats) {{
-  renderStatsImage(stats);
-}}
-
-function compare(a, b, key, asc) {{
-  const av = a[key];
-  const bv = b[key];
-
-  if (key === 'symbol' || key === 'symbol_name' || key === 'date') {{
-    const sa = (av ?? '').toString();
-    const sb = (bv ?? '').toString();
-    if (sa < sb) return asc ? -1 : 1;
-    if (sa > sb) return asc ? 1 : -1;
-    return 0;
-  }}
-
-  const na = asNumber(av);
-  const nb = asNumber(bv);
-  const aNan = Number.isNaN(na);
-  const bNan = Number.isNaN(nb);
-  if (aNan && bNan) return 0;
-  if (aNan) return asc ? 1 : -1;
-  if (bNan) return asc ? -1 : 1;
-  if (na < nb) return asc ? -1 : 1;
-  if (na > nb) return asc ? 1 : -1;
-  return 0;
-}}
-
-function render() {{
-  const tbody = document.querySelector('#tbl tbody');
-  tbody.innerHTML = '';
-
-  const rows = [...state.rows].sort((a,b) => compare(a,b,state.sortKey,state.sortAsc));
-  for (const r of rows) {{
-    const tr = document.createElement('tr');
-
-    const chg = asNumber(r.chg);
-    const pct = asNumber(r.pctchg);
-    if (!Number.isNaN(chg)) {{
-      tr.className = chg > 0 ? 'up' : (chg < 0 ? 'down' : 'flat');
-    }} else if (!Number.isNaN(pct)) {{
-      tr.className = pct > 0 ? 'up' : (pct < 0 ? 'down' : 'flat');
-    }} else {{
-      tr.className = 'flat';
-    }}
-
-    const symHref = `/stock/${{encodeURIComponent(fmt(r.symbol))}}?date=${{encodeURIComponent(fmt(r.date))}}`;
-    tr.innerHTML = `
-      <td class=\"fixedcol\"><a class=\"celllink\" href=\"${{symHref}}\">${{fmt(r.symbol)}}</a></td>
-      <td class=\"fixedcol\"><a class=\"celllink\" href=\"${{symHref}}\">${{fmt(r.symbol_name)}}</a></td>
-      <td class=\"fixedwhite\">${{fmt(r.date)}}</td>
-      <td class=\"right\">${{fmt(r.open)}}</td>
-      <td class=\"right\">${{fmt(r.close)}}</td>
-      <td class=\"right\">${{fmt(r.high)}}</td>
-      <td class=\"right\">${{fmt(r.low)}}</td>
-      <td class=\"right\">${{fmt(r.volume)}}</td>
-      <td class=\"right\">${{fmt(r.amount)}}</td>
-      <td class=\"right\">${{fmt(r.pctchg)}}</td>
-      <td class=\"right\">${{fmt(r.turnover)}}</td>
-    `;
-    tbody.appendChild(tr);
-  }}
-}}
-
-function setStatus(msg, isErr=false) {{
-  const el = document.getElementById('status');
-  el.textContent = msg;
-  el.className = isErr ? 'loading err' : 'loading';
-}}
-
-async function load() {{
-  setStatus('加载中...');
-  const resp = await fetch('/api/daily_summaries');
-  if (!resp.ok) {{
-    setStatus('加载失败: ' + resp.status, true);
-    return;
-  }}
-  const data = await resp.json();
-  if (!data.ok) {{
-    setStatus('加载失败: ' + (data.error || 'unknown'), true);
-    return;
-  }}
-  state.rows = data.rows || [];
-  renderStats(computeStats(state.rows));
-  document.getElementById('tbl').hidden = false;
-  setStatus(`已加载 ${{state.rows.length}} 条`);
-  render();
-}}
-
-function initSort() {{
-  document.querySelectorAll('th[data-key]').forEach(th => {{
-    th.addEventListener('click', () => {{
-      const key = th.getAttribute('data-key');
-      if (state.sortKey === key) {{
-        state.sortAsc = !state.sortAsc;
-      }} else {{
-        state.sortKey = key;
-        state.sortAsc = true;
-      }}
-      render();
-    }});
-  }});
-}}
-
-initSort();
-load();
-</script>
-</body>
-</html>"""
-
-    @app.get("/api/daily_summaries")
-    def api_daily_summaries():
-        nonlocal data_dir, list_mode, threads, adj
-
-        # Default behavior: use total list (no --list flag needed).
-        # If total list is missing/empty, fall back to self list.
-        effective_mode = (list_mode or "total").strip().lower()
-        if effective_mode == "auto":
-            effective_mode = "total"
-
-        syms, from_file = _resolve_symbol_list(data_dir, effective_mode)
-        if not syms and effective_mode != "self":
-            syms, from_file = _resolve_symbol_list(data_dir, "self")
-            if syms:
-                effective_mode = "self"
-
-        if not syms:
-            return jsonify(
-                {
-                    "ok": False,
-                    "error": f"No symbols found. Checked data_dir={data_dir} file={from_file or '(none)'}",
-                    "rows": [],
-                }
-            )
-
-        # CSV cache: <output_dir>/total-daily-view/YYYY-MM-DD.csv
-        # Use benchmark symbol to determine the latest trading day; if cache exists, return it.
-        cache_used = False
-        cache_file = None
-        benchmark_date = None
-        t0 = time.time()
-        try:
-          bench = fetch_latest_daily_summary(syms[0], adj=adj)
-          if bench and bench.get("date"):
-            benchmark_date = str(bench.get("date"))
-        except Exception:
-          benchmark_date = None
-
-        cdir = _cache_dir(data_dir)
-        if benchmark_date:
-          candidate = os.path.join(cdir, f"{benchmark_date}.csv")
-          if os.path.exists(candidate):
-            rows = _load_rows_from_csv(candidate)
-            if rows:
-              cache_used = True
-              cache_file = candidate
-              rows.sort(key=lambda x: str(x.get("symbol") or ""))
-              return jsonify(
-                {
-                  "ok": True,
-                  "meta": {
-                    "data_dir": os.path.abspath(data_dir),
-                    "symbols": len(syms),
-                    "threads": 0,
-                    "adj": adj,
-                    "list_mode": effective_mode,
-                    "list_file": from_file,
-                    "errors": 0,
-                    "cache_used": True,
-                    "cache_file": cache_file,
-                    "benchmark_date": benchmark_date,
-                    "elapsed_ms": int((time.time() - t0) * 1000),
-                  },
-                  "rows": rows,
-                  "errors": [],
-                }
-              )
-
-        # Fallback: if any cache exists, use the latest one.
-        latest_cache = _find_latest_cache_file(data_dir)
-        if latest_cache and os.path.exists(latest_cache):
-          rows = _load_rows_from_csv(latest_cache)
-          if rows:
-            cache_used = True
-            cache_file = latest_cache
-            rows.sort(key=lambda x: str(x.get("symbol") or ""))
-            return jsonify(
-              {
-                "ok": True,
-                "meta": {
-                  "data_dir": os.path.abspath(data_dir),
-                  "symbols": len(syms),
-                  "threads": 0,
-                  "adj": adj,
-                  "list_mode": effective_mode,
-                  "list_file": from_file,
-                  "errors": 0,
-                  "cache_used": True,
-                  "cache_file": cache_file,
-                  "benchmark_date": benchmark_date,
-                  "elapsed_ms": int((time.time() - t0) * 1000),
-                },
-                "rows": rows,
-                "errors": [],
-              }
-            )
-
-        max_workers = max(1, int(threads))
-        rows: list[dict] = []
-        errors: list[dict] = []
-
-        def _work(sym: str):
-            s = sym.strip()
-            if not s:
-                return None
-            try:
-                r = fetch_latest_daily_summary(s, adj=adj)
-                if not r:
-                    return {"symbol": s, "_error": "No data"}
-                return r
-            except Exception as e:
-                return {"symbol": s, "_error": f"{type(e).__name__}: {str(e)[:180]}"}
-
-        with ThreadPoolExecutor(max_workers=max_workers) as ex:
-            futures = [ex.submit(_work, s) for s in syms]
-            for fut in as_completed(futures):
-                r = fut.result()
-                if not r:
-                    continue
-                if r.get("_error"):
-                    errors.append(r)
-                    continue
-                rows.append(r)
-
-        rows.sort(key=lambda x: str(x.get("symbol") or ""))
-
-        # Persist cache using the most common date (usually the same for all symbols).
-        date_for_file = benchmark_date
-        if not date_for_file and rows:
-          counts: dict[str, int] = {}
-          for r in rows:
-            d = str(r.get("date") or "")
-            if not d:
-              continue
-            counts[d] = counts.get(d, 0) + 1
-          if counts:
-            date_for_file = max(counts.items(), key=lambda kv: kv[1])[0]
-        if date_for_file:
-          cache_file = os.path.join(_cache_dir(data_dir), f"{date_for_file}.csv")
-          try:
-            _save_rows_to_csv(cache_file, rows)
-          except Exception:
-            cache_file = None
-
-        return jsonify(
-            {
-                "ok": True,
-                "meta": {
-                    "data_dir": os.path.abspath(data_dir),
-                    "symbols": len(syms),
-                    "threads": max_workers,
-                    "adj": adj,
-                    "list_mode": effective_mode,
-                    "list_file": from_file,
-                    "errors": len(errors),
-              "cache_used": cache_used,
-              "cache_file": cache_file,
-              "benchmark_date": benchmark_date,
-              "elapsed_ms": int((time.time() - t0) * 1000),
-                },
-                "rows": rows,
-                "errors": errors,
-            }
-        )
-
-    @app.get("/stock/<symbol>")
-    def stock_page(symbol: str):
-        # static HTML; symbol/date are parsed on client from URL
-        return STOCK_PAGE_HTML
-
-    @app.get("/api/minute_vectors")
-    def api_minute_vectors():
-        nonlocal data_dir
-        symbol = (request.args.get("symbol") or "").strip()
-        date = (request.args.get("date") or "").strip()
-        if not symbol or not date:
-            return jsonify({"ok": False, "error": "symbol and date are required", "points": []})
-
-        # Expected location: <output_dir>/trade/<symbol>/<YYYY-MM-DD>.csv
-        path = os.path.join(os.path.abspath(data_dir), "trade", symbol, f"{date}.csv")
-        if not os.path.exists(path):
-            return jsonify({"ok": False, "error": f"minute csv not found: {path}", "points": []})
-
-        def sf(v):
-            try:
-                return float(v)
-            except Exception:
-                return None
-
-        points: list[dict] = []
-        prev_close = None
-        with open(path, "r", encoding="utf-8") as f:
-          reader = csv.DictReader(f)
-          for row in reader:
-            if not row:
-              continue
-
-            t = (row.get("时间") or "").strip()
-            turnover = sf(row.get("换手率(%)"))
-            open_ = sf(row.get("开盘"))
-            high_ = sf(row.get("最高"))
-            low_ = sf(row.get("最低"))
-            close_ = sf(row.get("收盘"))
-            if turnover is None or open_ is None or high_ is None or low_ is None or close_ is None or not t:
-              continue
-
-            if prev_close is None or prev_close == 0:
-              ret = 0.0
-              amp = 0.0
-            else:
-              ret = (close_ / prev_close - 1.0) * 100.0
-              amp = ((high_ - low_) / prev_close) * 100.0
-            prev_close = close_
-
-            points.append({"t": t, "x": turnover, "y": ret, "amp": amp, "o": open_, "h": high_, "l": low_, "c": close_})
-
-        return jsonify(
-            {
-                "ok": True,
-                "meta": {"symbol": symbol, "date": date, "file": path, "points": len(points)},
-                "points": points,
-            }
-        )
+    def index() -> str:
+        return DASHBOARD_HTML
 
     @app.get("/healthz")
     def healthz():
-        return jsonify({"ok": True})
+        return jsonify({"ok": True, "scan_output_dir": str(output_dir)})
+
+    @app.get("/api/scan_dates")
+    def api_scan_dates():
+        dates = _scan_dates(output_dir)
+        return jsonify({"scan_dates": dates, "latest_scan_date": dates[0] if dates else ""})
+
+    @app.get("/api/filter_options")
+    def api_filter_options():
+        scan_date = _resolve_scan_date(output_dir, request.args.get("scan_date", ""))
+        bundle = _load_bundle(output_dir, scan_date)
+        return jsonify(_bundle_filter_options(bundle))
+
+    @app.get("/api/industry_stats")
+    def api_industry_stats():
+        scan_date = _resolve_scan_date(output_dir, request.args.get("scan_date", ""))
+        bundle = _load_bundle(output_dir, scan_date)
+        rows = _build_industry_stats(bundle, dict(request.args))
+        return jsonify({"scan_date": scan_date, "row_count": int(len(rows)), "rows": rows})
+
+    @app.get("/api/scan")
+    def api_scan():
+        scan_date = _resolve_scan_date(output_dir, request.args.get("scan_date", ""))
+        view = str(request.args.get("view", "selected")).strip().lower()
+        bundle = _load_bundle(output_dir, scan_date)
+        df = bundle.get(view, pd.DataFrame())
+        filtered = _apply_filters(df, dict(request.args))
+        summary = bundle["summary"].astype(object).where(pd.notna(bundle["summary"]), None) if not bundle["summary"].empty else pd.DataFrame()
+        summary_rows = summary.to_dict(orient="records") if not summary.empty else []
+        return jsonify(
+            {
+                "scan_date": scan_date,
+                "view": view,
+                "row_count": int(len(filtered)),
+                "rows": filtered.where(pd.notna(filtered), None).to_dict(orient="records"),
+                "summary": summary_rows[0] if summary_rows else {},
+            }
+        )
+
+    @app.get("/api/backtest")
+    def api_backtest():
+        scan_date = _resolve_scan_date(output_dir, request.args.get("scan_date", ""))
+        bundle = _load_bundle(output_dir, scan_date)
+        summary = (
+            bundle["backtest_summary"].astype(object).where(pd.notna(bundle["backtest_summary"]), None)
+            if not bundle["backtest_summary"].empty
+            else pd.DataFrame()
+        )
+        summary_rows = summary.to_dict(orient="records") if not summary.empty else []
+        trades = _apply_filters(bundle["backtest_trades"], {**dict(request.args), "limit": request.args.get("limit", 200)})
+        daily = _apply_filters(bundle["backtest_daily"], {**dict(request.args), "limit": request.args.get("limit", 2000)})
+        return jsonify(
+            {
+                "scan_date": scan_date,
+                "summary": summary_rows[0] if summary_rows else {},
+                "daily": daily.where(pd.notna(daily), None).to_dict(orient="records"),
+                "trades": trades.where(pd.notna(trades), None).to_dict(orient="records"),
+            }
+        )
 
     return app
 
 
 def main() -> None:
-  p = argparse.ArgumentParser(description="gp-quant web UI")
-  p.add_argument("--host", default="0.0.0.0")
-  p.add_argument("--port", type=int, default=30200)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--scan-output-dir", type=str, default=str(DEFAULT_SCAN_OUTPUT_DIR))
+    parser.add_argument("--host", type=str, default="0.0.0.0")
+    parser.add_argument("--port", type=int, default=5050)
+    parser.add_argument("--debug", action="store_true")
+    args = parser.parse_args()
 
-  # output_dir is used to locate total_gplist.json/self_gplist.json and to store cache in total-daily-view/
-  p.add_argument("--data_dir", default=None, help="Alias of --output-dir")
-  p.add_argument(
-    "--output-dir",
-    dest="output_dir",
-    default=None,
-    help="Directory that contains total_gplist.json (and is used to store total-daily-view cache)",
-  )
-  # Backward compatible flag
-  p.add_argument("--output_dir", dest="output_dir")
-
-  # Kept for compatibility; default is total so you generally don't need to pass it.
-  p.add_argument("--list", dest="list_mode", default="total", choices=["auto", "total", "self"])
-  p.add_argument("--threads", type=int, default=20)
-  p.add_argument("--adj", default="none", choices=["none", "qfq", "hfq"])
-  args = p.parse_args()
-
-  out_dir = args.output_dir or args.data_dir or default_data_dir()
-  app = create_app(out_dir, args.list_mode, args.threads, args.adj)
-  app.run(host=args.host, port=args.port, debug=False)
+    app = create_app(args.scan_output_dir)
+    app.run(host=args.host, port=args.port, debug=args.debug)
 
 
 if __name__ == "__main__":

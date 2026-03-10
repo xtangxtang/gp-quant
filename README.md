@@ -1,244 +1,224 @@
 # gp-quant
 
-这是一个用于抓取 A 股自选股每日成交明细的 Python 脚本。
+`gp-quant` 当前是一套面向 A 股的量化研究工作区，核心分成两部分：
 
-当前数据源为东方财富的 1 分钟行情（分钟线），脚本会将其转换为“tick-like”的 CSV 结构（每分钟一行），用于后续分析流程兼容。
+- `src/downloader/`：基于 Tushare 拉取全市场日线、股票列表和扩展基本面数据
+- `src/analysis/`：基于日 / 周 / 月多周期共振的物理风格选股与评估
 
-分钟数据默认使用**前复权（qfq）**价格，如需不复权/后复权可通过参数 `--adj none` / `--adj hfq` 指定（wrapper 中同样支持 `-a/--adj`）。
+旧的 `src/strategy/` 相变策略已经移除，当前仓库的正式分析主线是 `src/analysis/` 下的 multi-timeframe resonance 扫描器。
 
-> 重要限制：东方财富的分钟历史接口（`trends2/get`）**只支持最近约 5 个交易日**的分钟数据。
-> 
-> - 当你请求的 `date` 不在最近 5 个交易日范围内时，脚本会明确报错并记录失败任务，避免把“最新一天”的分钟数据写入到历史日期文件里。
-> - 如果你需要更长周期的历史行情，请考虑改用日线（`klt=101`）或其他数据源。
+## 当前目录
 
-> 复权说明：分钟数据的 qfq/hfq 是通过“日线复权因子”实现的：对目标日期取日线 `close_adj / close_raw` 作为缩放因子，将分钟的价格与成交额做同倍率缩放；成交量保持不变。
+```text
+gp-quant/
+├── scripts/
+│   ├── run_get_tushare_all.sh
+│   ├── run_get_tushare_daily_full.sh
+│   ├── run_get_tushare_extended.sh
+│   └── run_multitimeframe_resonance_scan.sh
+├── src/
+│   ├── analysis/
+│   ├── downloader/
+│   └── web/
+├── results/
+│   └── multitimeframe_resonance/
+├── complexity_theory_notes.md
+├── requirements.txt
+└── README.md
+```
 
-## 功能特性
+## 核心思路
 
-1. **多线程并发抓取**：支持多线程同时下载多只股票的数据，提高下载效率。
-2. **自定义股票列表**：通过 `self_gplist.json` 文件灵活配置需要抓取的股票代码。
-3. **历史数据回溯**：支持通过命令行参数指定日期范围，自动下载历史数据。
-4. **智能节假日过滤**：内置中国法定节假日和周末过滤逻辑，只在真正的交易日进行数据抓取。
-5. **反爬虫与断点续传**：
-    - 每个任务会加入 2～5 秒的随机延迟，降低请求节奏。
-    - 当前实现不做“指数退避自动重试”（避免在被限流时持续打点）。
-    - 如果某天的数据彻底下载失败或程序被意外中断，失败的任务会被记录到 `failed_tasks.json` 中。
-    - 自选股模式下（`src/downloader/get_selflist_daily.py`），下次启动脚本时会自动读取并将这些失败任务追加到任务列表中重试。
-    - 全市场模式下（`src/downloader/get_total_daily.py`），同样会记录 `failed_tasks.json`，但当前入口脚本不会自动读取该文件（可按需自行重跑日期范围）。
-6. **自定义存储目录**：支持将下载的数据保存到指定的文件夹中。
+当前分析逻辑来自 `complexity_theory_notes.md` 的复杂系统 / 经济物理学视角，用日线先识别局部有序化，再用周线、月线做更高层级的共振确认。
 
-> 说明：为避免起始日期早于上市日期导致大量无效请求，自选股/全市场模式都会缓存上市日期并跳过上市日前的任务（自选股缓存文件 `self_listing_dates.json`，全市场缓存文件 `total_listing_dates.json`）。如需关闭可加参数 `--no_ipo_filter`（wrapper 中为 `--no-ipo-filter`）。
+特征上主要对应为：
+
+- `energy`：资金流和成交额强度
+- `temperature`：换手与波动的相对状态
+- `order`：均线结构、突破状态
+- `phase`：熵、Hurst 指数等秩序变化
+- `switch`：从混沌向有序切换的触发项
+
+最终输出两类结果：
+
+- 单周期首信号评估：日 / 周 / 月分别看首次触发后的年内表现
+- 多周期共振评估：把日线触发与周线、月线支持合并，评估共振后的收益与回撤空间
 
 ## 环境依赖
 
-请确保已安装 Python 3，并安装以下依赖库：
+建议使用现有 conda 环境，或至少保证 Python 3.12 左右可用。
+
+安装依赖：
 
 ```bash
 pip install -r requirements.txt
 ```
 
-## 配置文件
+如果需要拉取 Tushare 数据，需要准备有效的 Tushare token。当前下载脚本支持显式用 `--token` 传入。
 
-`self_gplist.json` 的读取规则如下：
+## 数据下载
 
-- 如果运行时显式传了 `--output_dir`，则从该目录读取/创建 `self_gplist.json`
-- 如果没有传 `--output_dir`，则从当前运行目录读取/创建 `self_gplist.json`
+### 1. 一键拉取完整 Tushare 数据
 
-文件内容填入你需要抓取的股票代码（带 `sh` 或 `sz` 前缀）：
+会依次完成：
 
-```json
-[
-    "sz002409",
-    "sz301323",
-    "sh688114",
-    "sh688508"
-]
-```
-*(如果该文件不存在，脚本首次运行时会自动生成一个包含默认股票的示例文件。)*
-
-## 启动方式
-
-### 0. 一键下载“今天所有能下载的数据”
-
-如果你希望用一个命令把**今天（或指定日期）**能拉取到的数据都拉下来（全市场分钟、自选股分钟、最近交易日交易总结 CSV、全市场日线历史断点续跑），可以用：
+- 获取当前股票列表
+- 下载全市场日线历史到 `tushare-daily-full/`
+- 下载扩展数据，例如复权因子、财务、分红、停复牌等
 
 ```bash
-./run_get_today_all.sh -o /path/to/output_dir
-
-# 指定日期（默认是今天）
-./run_get_today_all.sh -o /path/to/output_dir --date 2026-02-24
+./scripts/run_get_tushare_all.sh -o /nvme5/xtang/gp-workspace/gp-data --token <your_tushare_token>
 ```
 
-输出会写入到同一个 `output_dir` 下的多个子目录：
-
-- `trade/<symbol>/<YYYY-MM-DD>.csv`：分钟数据（全市场 + 自选股）
-- `total-daily-view/YYYY-MM-DD.csv`：最近交易日“交易总结”缓存 CSV（按 total_gplist.json）
-- `total-fundamentals/YYYY-MM-DD.csv`：财务 + 估值（估值快照 + F10 主要财务指标）缓存 CSV
-- `total-fundflow-stock/YYYY-MM-DD.csv`：个股资金流向（主力/超大/大/中/小 单净流入）缓存 CSV
-- `total-fundflow-industry/YYYY-MM-DD.csv`：行业板块资金流向（主力/超大/大/中/小 单净流入）缓存 CSV
-- `total-daily-trade/<symbol>.csv`：全市场日线历史（断点续跑 + 扫描日期连续性并补齐缺失段）
-
-> 注意：全市场分钟数据量非常大，首次运行会花较久时间。
-
-### 1. 下载当天的最新数据（默认行为）
-如果不带任何参数运行，脚本会自动判断今天是否为交易日，如果是，则下载今天的数据。
-```bash
-python src/downloader/get_selflist_daily.py
-```
-
-### 2. 下载指定日期范围内的数据
-使用 `--start_date` 和 `--end_date` 参数（格式为 `YYYY-MM-DD`）。脚本会自动跳过期间的周末和法定节假日。
-```bash
-python src/downloader/get_selflist_daily.py --start_date 2023-08-01 --end_date 2023-08-05
-```
-
-### 3. 从指定日期一直下载到今天
-如果只提供 `--start_date`，脚本会默认将结束日期设置为今天。
-```bash
-python src/downloader/get_selflist_daily.py --start_date 2023-08-01
-```
-
-### 4. 指定数据保存目录
-使用 `--output_dir` 参数可以将数据保存到指定路径（默认为当前目录下的 `gp_daily`）。
-```bash
-python src/downloader/get_selflist_daily.py --start_date 2023-08-01 --output_dir my_stock_data
-```
-
-### 5. 下载全市场股票（Total，分钟数据）
-使用 `run_get_total_minute.sh` 可以自动获取截止上个交易日的全市场股票列表（保存为 `total_gplist.json`），并按日期范围下载分钟数据。
-
-`total_gplist.json` 的保存位置规则与 `self_gplist.json` 一致：显式传了 `--output_dir` 则保存在该目录；否则保存在当前运行目录。
-
-为避免“起始日期早于上市日期”的股票产生大量无效请求，全市场模式会自动拉取并缓存各股票的上市日期（文件 `total_listing_dates.json`），并跳过上市日前的任务。如需关闭该行为，可加参数 `--no_ipo_filter`。
-```bash
-./run_get_total_minute.sh -s 2023-08-01 -o /tmp/my_total_data
-```
-
-### 6. 下载全市场“日线历史”(IPO -> 至今)
-
-如果你想下载“当前仍在市场的全部股票”的**日线 K 线历史数据**（从上市日起一直到最新交易日），可以使用：
+### 2. 只下载全市场日线
 
 ```bash
-./run_get_total_daily_trade.sh -o /path/to/output_dir
+./scripts/run_get_tushare_daily_full.sh -o /nvme5/xtang/gp-workspace/gp-data --token <your_tushare_token>
 ```
 
-输出目录为：`<output_dir>/total-daily-trade/`，每只股票一个 CSV：
+常见补充参数：
 
-```text
-<output_dir>/
-    total-daily-trade/
-        sh600000.csv
-        sz000001.csv
-        ...
-```
+- `--start-date 20200101`
+- `--end-date 20251231`
+- `--symbols sh600000,sz000001`
+- `--list-file tushare_gplist.json`
 
-说明：该脚本默认支持断点续跑（如果 CSV 已存在，会从最后一天继续追加）。
-
-### 7. 仅下载“最近交易日交易总结”CSV（不启动 Web）
-
-如果只想生成/刷新 `total-daily-view/YYYY-MM-DD.csv`（和 Web 页面的缓存一致），可以直接运行：
+### 3. 只下载扩展数据
 
 ```bash
-python src/downloader/get_total_daily_view.py --output_dir /path/to/output_dir --threads 20 --adj none
+./scripts/run_get_tushare_extended.sh -o /nvme5/xtang/gp-workspace/gp-data --token <your_tushare_token>
 ```
 
-### 8. 下载“财务 + 估值”汇总 CSV（不启动 Web）
+默认会下载：
 
-该脚本会对 `total_gplist.json`（或 `self_gplist.json`）中的每只股票，抓取：
+- `trade_cal`
+- `adj_factor`
+- `stk_limit`
+- `suspend_d`
+- `income`
+- `balancesheet`
+- `cashflow`
+- `fina_indicator`
+- `dividend`
 
-- 估值快照：价格、市值、PE(P/E TTM)、PB、行业等（来自东方财富行情接口）
-- 财务关键指标：EPS、BPS、营收、净利润、同比、ROE 等（来自东方财富 F10 主要指标）
+## 输入数据约定
 
-并缓存为：`<output_dir>/total-fundamentals/YYYY-MM-DD.csv`。
+多周期共振扫描默认使用：
+
+- 日线目录：`/nvme5/xtang/gp-workspace/gp-data/tushare-daily-full`
+- 股票名称映射：`/nvme5/xtang/gp-workspace/gp-data/tushare_stock_basic.csv`
+
+个股 CSV 至少应包含这些列：
+
+- `trade_date`
+- `open`
+- `close`
+- `amount`
+- `turnover_rate`
+- `net_mf_amount`
+
+## 运行正式扫描
+
+推荐直接使用 `scripts/` 里的入口脚本：
 
 ```bash
-python src/downloader/get_total_fundamentals.py --output_dir /path/to/output_dir --threads 20 --list total
+./scripts/run_multitimeframe_resonance_scan.sh
 ```
 
-### 9. 下载“个股资金流向”汇总 CSV
+默认行为：
 
-该脚本会对 `total_gplist.json`（或 `self_gplist.json`）中的每只股票，拉取最新交易日的资金流向快照（主力/超大/大/中/小 单净流入），缓存为：
+- 扫描年份：`2025`
+- 输出目录：`results/multitimeframe_resonance/out_2025_multitimeframe_fullscan`
+- 从全市场按年内涨幅排序，取前 `300` 只做详细多周期扫描
 
-`<output_dir>/total-fundflow-stock/YYYY-MM-DD.csv`
+常见用法：
 
 ```bash
-python src/downloader/get_total_fundflow_stock.py --output_dir /path/to/output_dir --threads 24 --list total
+# 指定年份
+./scripts/run_multitimeframe_resonance_scan.sh --test-year 2024
+
+# 小样本 smoke test
+./scripts/run_multitimeframe_resonance_scan.sh \
+    --symbols sh600000,sz000001 \
+    --out-dir /tmp/gp_quant_resonance_smoke
+
+# 指定自定义数据目录
+./scripts/run_multitimeframe_resonance_scan.sh \
+    --data-dir /nvme5/xtang/gp-workspace/gp-data/tushare-daily-full \
+    --basic-path /nvme5/xtang/gp-workspace/gp-data/tushare_stock_basic.csv
 ```
 
-### 10. 下载“行业板块资金流向”汇总 CSV
-
-该脚本会拉取最新行业板块资金流向快照（主力/超大/大/中/小 单净流入），缓存为：
-
-`<output_dir>/total-fundflow-industry/YYYY-MM-DD.csv`
+如果你要直接运行 Python 入口：
 
 ```bash
-python src/downloader/get_total_fundflow_industry.py --output_dir /path/to/output_dir
+python src/analysis/run_multitimeframe_resonance_scan.py \
+    --data_dir /nvme5/xtang/gp-workspace/gp-data/tushare-daily-full \
+    --out_dir /tmp/gp_quant_resonance_smoke \
+    --test_year 2025 \
+    --symbols sh600000,sz000001,sh601398 \
+    --basic_path /nvme5/xtang/gp-workspace/gp-data/tushare_stock_basic.csv
 ```
 
-## 输出目录结构
+## 扫描输出
 
-下载的数据会按照股票代码进行分类，每天的数据保存为一个独立的 CSV 文件。
+正式结果会落到：
 
-假设你运行了 `python src/downloader/get_selflist_daily.py --output_dir my_data`，目录结构如下（注意：此时 `self_gplist.json` 会读取/创建在 `my_data` 目录内）：
+- `results/multitimeframe_resonance/`
 
-```text
-当前工作目录/
-│
-└── my_data/                  # 你指定的输出目录 (默认是 gp_daily)
-    │
-    ├── self_gplist.json      # 你的自选股配置文件（显式传了 --output_dir 时放这里）
-    ├── failed_tasks.json     # (如果发生错误) 记录下载失败任务的文件，下次启动会自动读取
-    │
-    └── trade/                # 分钟数据输出目录
-        │
-        ├── sz002409/         # 以股票代码命名的子文件夹
-        │   ├── 2023-08-01.csv
-        │   └── 2023-08-02.csv
-        │
-        └── sh688114/         # 另一只股票的子文件夹
-            ├── 2023-08-01.csv
-            └── 2023-08-02.csv
-```
+常见输出文件：
 
-### CSV 数据格式说明
-每个 CSV 文件包含以下列（与东方财富分钟线含义一致）：
-- 时间 (例如: 2026-02-13 09:31)
-- 开盘
-- 收盘
-- 最高
-- 最低
-- 成交量(手)
-- 成交额(元)
-- 均价
+- `bull_stocks_<year>_all.csv`
+- `bull_stocks_<year>_top<top_n>.csv`
+- `multitimeframe_entry_eval_<year>.csv`
+- `multitimeframe_entry_eval_<year>_agg.csv`
+- `multitimeframe_resonance_eval_<year>.csv`
+- `multitimeframe_resonance_eval_<year>_agg.csv`
+- `multitimeframe_resonance_signals_<year>.csv`
 
-## Web 界面（浏览最近一天交易总结）
+含义大致为：
 
-在 `gp-quant` 内提供了一个最小 Web 页面，用于浏览**最近一天**每只股票的“交易总结”表格。
+- `bull_stocks_*`：年内涨幅排序及入选详细扫描的股票池
+- `entry_eval_*`：单周期信号评估结果
+- `resonance_eval_*`：多周期共振首信号评估结果
+- `resonance_signals_*`：年内所有共振信号明细
 
-- 主界面：表格默认按股票 id（symbol）排序
-- 支持排序：点击任意表头即可按该列排序（再点一次切换升/降序）
-- 数据来源：**东方财富日线接口**（`kline/get`，`klt=101`）
+## analysis 模块说明
 
-启动方式：
+`src/analysis/` 目前已经拆成较清晰的职责边界：
+
+- `multitimeframe_feature_engine.py`：日 / 周 / 月 K 线聚合与物理态特征计算
+- `multitimeframe_evaluation.py`：单周期与共振信号评估
+- `multitimeframe_physics_utils.py`：熵、Hurst、z-score、指数 regime 工具
+- `multitimeframe_scan_service.py`：全市场排序和扫描编排
+- `multitimeframe_report_writer.py`：结果 CSV 落盘
+- `run_multitimeframe_resonance_scan.py`：CLI 入口
+
+更细的使用说明见 [src/analysis/README.md](/nvme5/xtang/gp-workspace/gp-quant/src/analysis/README.md)。
+
+## Web 模块
+
+`src/web/` 目录仍然保留，用于轻量页面或数据浏览实验，但它不是当前仓库的主分析入口。当前正式研究与生产输出，默认都走：
+
+- 数据下载：`scripts/run_get_tushare_*.sh`
+- 分析扫描：`scripts/run_multitimeframe_resonance_scan.sh`
+
+## 建议工作流
 
 ```bash
-pip install -r requirements.txt
+# 1. 更新数据
+./scripts/run_get_tushare_all.sh -o /nvme5/xtang/gp-workspace/gp-data --token <your_tushare_token>
 
-# 默认读取 ../gp-data 下的 total_gplist.json（无需 --list 参数）
-python src/web/app.py
+# 2. 小样本验证
+./scripts/run_multitimeframe_resonance_scan.sh \
+    --symbols sh600000,sz000001 \
+    --out-dir /tmp/gp_quant_resonance_smoke
 
-# 如果你的股票列表 JSON / 输出目录在其他位置，用 --output-dir 指定（推荐）
-python src/web/app.py --output-dir /path/to/output_dir
-
-# --data_dir 仍可用（等价于 --output-dir）
-python src/web/app.py --data_dir /path/to/output_dir
+# 3. 全量正式扫描
+./scripts/run_multitimeframe_resonance_scan.sh
 ```
 
-缓存行为：
+## 备注
 
-- Web 会把“最近一天成交总结”缓存为 CSV：`<output_dir>/total-daily-view/YYYY-MM-DD.csv`
-- 每次启动/刷新时：优先查找最新交易日对应的 CSV；存在则直接读取，不存在才从东方财富下载并写入缓存
-
-启动后访问：
-
-- http://127.0.0.1:30200/
+- 根目录旧策略脚本和 `src/strategy/` 已经移除，不再维护
+- 输出文件已经从代码目录分离到 `results/` 下，便于版本管理
+- 如果你只想理解策略本身，优先阅读：`complexity_theory_notes.md` 和 `src/analysis/README.md`

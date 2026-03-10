@@ -1,5 +1,10 @@
 #!/bin/bash
 
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+WORKSPACE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
 OUTPUT_DIR=""
 THREADS="4"
 TOKEN="3404e77dbe323ba4582d677ace412c0bc257f72b39f956b7bf8f975f"
@@ -40,7 +45,7 @@ fi
 echo "======================================================"
 echo "1. 获取当前所有可交易股票列表..."
 echo "======================================================"
-python src/downloader/get_tushare_stock_list.py --output_dir "$OUTPUT_DIR" --token "$TOKEN"
+python "$WORKSPACE_DIR/src/downloader/get_tushare_stock_list.py" --output_dir "$OUTPUT_DIR" --token "$TOKEN"
 
 if [ $? -ne 0 ]; then
     echo "获取股票列表失败，退出。"
@@ -51,7 +56,7 @@ echo ""
 echo "======================================================"
 echo "2. 开始下载所有股票的历史交易记录..."
 echo "======================================================"
-./run_get_tushare_daily_full.sh -o "$OUTPUT_DIR" -t "$THREADS" --token "$TOKEN" --list-file "tushare_gplist.json"
+"$SCRIPT_DIR/run_get_tushare_daily_full.sh" -o "$OUTPUT_DIR" -t "$THREADS" --token "$TOKEN" --list-file "tushare_gplist.json"
 
 if [ $? -ne 0 ]; then
   echo "日线历史下载失败，退出。"
@@ -62,4 +67,4 @@ echo ""
 echo "======================================================"
 echo "3. 开始下载/更新扩展数据(复权因子/财务等)..."
 echo "======================================================"
-./run_get_tushare_extended.sh -o "$OUTPUT_DIR" -t "$THREADS" --token "$TOKEN"
+"$SCRIPT_DIR/run_get_tushare_extended.sh" -o "$OUTPUT_DIR" -t "$THREADS" --token "$TOKEN"

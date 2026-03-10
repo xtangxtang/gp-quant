@@ -1,5 +1,10 @@
 #!/bin/bash
 
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+WORKSPACE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
 OUTPUT_DIR=""
 THREADS="4"
 TOKEN="3404e77dbe323ba4582d677ace412c0bc257f72b39f956b7bf8f975f"
@@ -54,7 +59,7 @@ if [[ -z "$OUTPUT_DIR" ]]; then
   exit 1
 fi
 
-CMD="python src/downloader/get_tushare_daily_full.py --output_dir $OUTPUT_DIR --token $TOKEN --threads $THREADS --start_date $START_DATE --list_file $LIST_FILE"
+CMD="python $WORKSPACE_DIR/src/downloader/get_tushare_daily_full.py --output_dir $OUTPUT_DIR --token $TOKEN --threads $THREADS --start_date $START_DATE --list_file $LIST_FILE"
 
 if [[ -n "$END_DATE" ]]; then
   CMD="$CMD --end_date $END_DATE"

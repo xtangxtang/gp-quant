@@ -1,5 +1,10 @@
 #!/bin/bash
 
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+WORKSPACE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
 OUTPUT_DIR=""
 THREADS="4"
 TOKEN="3404e77dbe323ba4582d677ace412c0bc257f72b39f956b7bf8f975f"
@@ -54,14 +59,14 @@ echo "======================================================"
 for dataset in "${GLOBAL_DATASETS[@]}"; do
     echo ""
     echo ">>> 正在下载全局数据集: $dataset <<<"
-    python src/downloader/get_tushare_extended.py --output_dir "$OUTPUT_DIR" --token "$TOKEN" --dataset "$dataset"
+  python "$WORKSPACE_DIR/src/downloader/get_tushare_extended.py" --output_dir "$OUTPUT_DIR" --token "$TOKEN" --dataset "$dataset"
 done
 
 # 下载按股票遍历的数据
 for dataset in "${STOCK_DATASETS[@]}"; do
     echo ""
     echo ">>> 正在下载股票数据集: $dataset <<<"
-    python src/downloader/get_tushare_extended.py --output_dir "$OUTPUT_DIR" --token "$TOKEN" --threads "$THREADS" --dataset "$dataset"
+  python "$WORKSPACE_DIR/src/downloader/get_tushare_extended.py" --output_dir "$OUTPUT_DIR" --token "$TOKEN" --threads "$THREADS" --dataset "$dataset"
 done
 
 echo ""

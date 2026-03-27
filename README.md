@@ -3,9 +3,9 @@
 `gp-quant` 当前是一套面向 A 股的量化研究工作区，核心分成两部分：
 
 - `src/downloader/`：基于 Tushare 拉取全市场日线、股票列表和扩展基本面数据
-- `src/analysis/`：基于日 / 周 / 月多周期共振的物理风格选股与评估
+- `src/strategy/multitimeframe/`：基于日 / 周 / 月多周期共振的物理风格选股与评估
 
-旧的 `src/strategy/` 相变策略已经移除，当前仓库的正式分析主线是 `src/analysis/` 下的 multi-timeframe resonance 扫描器。
+当前仓库的正式策略主线是 `src/strategy/multitimeframe/` 下的 multi-timeframe resonance 扫描器。
 
 ## 当前目录
 
@@ -17,7 +17,8 @@ gp-quant/
 │   ├── run_get_tushare_extended.sh
 │   └── run_multitimeframe_resonance_scan.sh
 ├── src/
-│   ├── analysis/
+│   ├── strategy/
+│   │   └── multitimeframe/
 │   ├── downloader/
 │   └── web/
 ├── results/
@@ -169,7 +170,7 @@ pip install -r requirements.txt
 如果你要直接运行 Python 入口：
 
 ```bash
-python src/analysis/run_multitimeframe_resonance_scan.py \
+python src/strategy/multitimeframe/run_multitimeframe_resonance_scan.py \
     --data_dir /nvme5/xtang/gp-workspace/gp-data/tushare-daily-full \
     --out_dir /tmp/gp_quant_resonance_smoke \
     --scan_date 20260309 \
@@ -211,9 +212,9 @@ python src/analysis/run_multitimeframe_resonance_scan.py \
 - `industry` / `market` / `area`：来自 `tushare_stock_basic.csv` 的行业、板块与地域信息
 - `nav` / `strategy_daily_return`：前瞻回测日度净值与当日组合收益
 
-## analysis 模块说明
+## Strategy 模块说明
 
-`src/analysis/` 目前已经拆成较清晰的职责边界：
+`src/strategy/multitimeframe/` 目前已经拆成较清晰的职责边界：
 
 - `multitimeframe_feature_engine.py`：日 / 周 / 月 K 线聚合与物理态特征计算
 - `multitimeframe_evaluation.py`：单周期与共振信号评估
@@ -222,15 +223,16 @@ python src/analysis/run_multitimeframe_resonance_scan.py \
 - `multitimeframe_report_writer.py`：结果 CSV 落盘
 - `run_multitimeframe_resonance_scan.py`：CLI 入口
 
-更细的使用说明见 [src/analysis/README.md](/nvme5/xtang/gp-workspace/gp-quant/src/analysis/README.md)。
+更细的使用说明见 [src/strategy/multitimeframe/README.md](/nvme5/xtang/gp-workspace/gp-quant/src/strategy/multitimeframe/README.md)。
 
 ## Web 模块
 
-`src/web/` 现在提供一个轻量 dashboard，用来直接浏览扫描 CSV、手动加过滤条件，以及联动查看前瞻回测摘要和净值曲线。页面支持：
+`web/` 现在提供一个策略控制台：首页会自动发现 `src/strategy` 下的策略，展示 README 中的一句话概括；进入策略页后可查看 README 的“描述”和“主要参数”，填写参数并直接应用策略执行选股。页面支持：
 
-- 按行业 / 市场 / 地域过滤
-- 按成交额 / 换手率 / 共振分 / 支撑数过滤
-- 查看入选组合、候选池、全市场快照和逐笔交易
+- 首页按策略目录自动展示策略卡片
+- 策略页展示 README 的“描述”和“主要参数”
+- 根据 CLI 参数自动生成表单并直接执行策略
+- 展示入选股票、候选池、摘要指标和执行日志
 
 当前正式研究与生产输出，默认都走：
 
@@ -242,8 +244,7 @@ python src/analysis/run_multitimeframe_resonance_scan.py \
 ```bash
 /root/miniforge3/bin/conda run -p /root/miniforge3 --no-capture-output python \
     /root/.vscode-server/extensions/ms-python.python-2026.2.0-linux-x64/python_files/get_output_via_markers.py \
-    src/web/app.py \
-    --scan-output-dir /nvme5/xtang/gp-workspace/gp-quant/results/multitimeframe_resonance/live_market_scan \
+    web/app.py \
     --port 5050
 ```
 
@@ -264,6 +265,6 @@ python src/analysis/run_multitimeframe_resonance_scan.py \
 
 ## 备注
 
-- 根目录旧策略脚本和 `src/strategy/` 已经移除，不再维护
+- 多周期策略代码目前统一收敛在 `src/strategy/multitimeframe/`
 - 输出文件已经从代码目录分离到 `results/` 下，便于版本管理
-- 如果你只想理解策略本身，优先阅读：`complexity_theory_notes.md` 和 `src/analysis/README.md`
+- 如果你只想理解策略本身，优先阅读：`complexity_theory_notes.md` 和 `src/strategy/multitimeframe/README.md`

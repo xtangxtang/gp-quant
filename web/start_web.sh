@@ -1,18 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Start the resonance scan dashboard.
+# Start the strategy console.
 # Usage examples:
-#   ./src/web/start_web.sh
-#   ./src/web/start_web.sh --port 8010
-#   ./src/web/start_web.sh --scan-output-dir /nvme5/xtang/gp-workspace/gp-quant/results/multitimeframe_resonance/live_market_scan
+#   ./web/start_web.sh
+#   ./web/start_web.sh --port 8010
 #
-# Defaults (see src/web/app.py):
+# Defaults (see web/app.py):
 #   --host 0.0.0.0
 #   --port 5050
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 cd "${REPO_ROOT}"
 
@@ -21,4 +20,4 @@ cd "${REPO_ROOT}"
 PY_RUNNER="${GP_WEB_PY:-python}"
 
 # Forward all args to the app.
-exec ${PY_RUNNER} src/web/app.py "$@"
+exec ${PY_RUNNER} web/app.py "$@"

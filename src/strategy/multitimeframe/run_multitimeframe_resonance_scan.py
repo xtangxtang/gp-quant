@@ -5,10 +5,10 @@ from pathlib import Path
 if __package__:
     from .multitimeframe_scan_service import ScanConfig, run_multitimeframe_scan
 else:
-    _PROJECT_ROOT = Path(__file__).resolve().parents[2]
+    _PROJECT_ROOT = Path(__file__).resolve().parents[3]
     if str(_PROJECT_ROOT) not in sys.path:
         sys.path.insert(0, str(_PROJECT_ROOT))
-    from src.analysis.multitimeframe_scan_service import ScanConfig, run_multitimeframe_scan
+    from src.strategy.multitimeframe.multitimeframe_scan_service import ScanConfig, run_multitimeframe_scan
 
 
 def _build_argument_parser() -> argparse.ArgumentParser:

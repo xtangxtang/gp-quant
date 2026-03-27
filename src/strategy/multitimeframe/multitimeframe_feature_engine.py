@@ -7,10 +7,10 @@ import pandas as pd
 if __package__:
     from .multitimeframe_physics_utils import calc_entropy, fast_hurst, rolling_zscore
 else:
-    _PROJECT_ROOT = Path(__file__).resolve().parents[2]
+    _PROJECT_ROOT = Path(__file__).resolve().parents[3]
     if str(_PROJECT_ROOT) not in sys.path:
         sys.path.insert(0, str(_PROJECT_ROOT))
-    from src.analysis.multitimeframe_physics_utils import calc_entropy, fast_hurst, rolling_zscore
+    from src.strategy.multitimeframe.multitimeframe_physics_utils import calc_entropy, fast_hurst, rolling_zscore
 
 
 def to_trade_date_str(df: pd.DataFrame) -> pd.DataFrame:

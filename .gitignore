@@ -25,3 +25,4 @@ _smoke_out/
 _smoke_total/
 _smoke*
 gp-quant/results/multitimeframe_resonance/*
+gp-quant/results/*

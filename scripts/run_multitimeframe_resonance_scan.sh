@@ -105,7 +105,7 @@ done
 mkdir -p "$OUT_DIR"
 
 CMD=(
-  src/analysis/run_multitimeframe_resonance_scan.py
+  src/strategy/multitimeframe/run_multitimeframe_resonance_scan.py
   --data_dir "$DATA_DIR"
   --out_dir "$OUT_DIR"
   --basic_path "$BASIC_PATH"

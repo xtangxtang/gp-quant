@@ -16,6 +16,26 @@ STRATEGY_ROOT = REPO_ROOT / "src" / "strategy"
 DEFAULT_DATA_DIR = WORKSPACE_ROOT / "gp-data" / "tushare-daily-full"
 DEFAULT_BASIC_PATH = WORKSPACE_ROOT / "gp-data" / "tushare_stock_basic.csv"
 DEFAULT_OUTPUT_ROOT = REPO_ROOT / "results" / "strategy_runs"
+STRATEGY_LABELS = {
+  "entropy_bifurcation_setup": "熵分叉启动",
+  "uptrend_hold_state_flow": "上升趋势持有状态图",
+}
+STRATEGY_TAGLINES = {
+  "entropy_bifurcation_setup": "在低熵压缩态中，用临界慢化和突破触发去捕捉分叉启动时刻。",
+  "uptrend_hold_state_flow": "把上升趋势里的熵秩序持有、快速扩张持有、快速扩张衰竭退出放进一张状态图里，从买点开始评估整段持有路径。",
+}
+STRATEGY_VARIANT_LABELS = {
+  "compression_breakout": "低熵压缩突破",
+  "self_organized_trend": "自组织趋势跟随",
+  "fractal_pullback": "分形回踩续涨",
+  "market_energy_flow": "市场能量流",
+}
+STRATEGY_VARIANT_TAGLINES = {
+  "compression_breakout": "波动率压缩后跟踪放量突破与秩序切换。",
+  "self_organized_trend": "资金持续注入后的顺势跟随与强者恒强筛选。",
+  "fractal_pullback": "在大级别上升趋势里寻找缩量回踩后的再启动。",
+  "market_energy_flow": "从横截面资金能量与行业共振中筛选领先方向。",
+}
 
 
 APP_HTML = """<!doctype html>
@@ -272,6 +292,26 @@ APP_HTML = """<!doctype html>
       line-height: 1.7;
     }
 
+    .markdown .markdown-table-wrap {
+      margin: 0 0 14px;
+      overflow: auto;
+      border-radius: 16px;
+      border: 1px solid rgba(22, 32, 36, 0.08);
+      background: rgba(255,255,255,0.46);
+    }
+
+    .markdown table {
+      min-width: 680px;
+      font-size: 13px;
+    }
+
+    .markdown th,
+    .markdown td {
+      white-space: normal;
+      vertical-align: top;
+      line-height: 1.6;
+    }
+
     .form-grid {
       display: grid;
       grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -396,6 +436,175 @@ APP_HTML = """<!doctype html>
       gap: 18px;
     }
 
+    .state-flow-block {
+      margin-bottom: 18px;
+      padding: 18px;
+      border-radius: 22px;
+      border: 1px solid rgba(22, 32, 36, 0.08);
+      background: rgba(255,255,255,0.55);
+    }
+
+    .state-flow-summary {
+      margin: 10px 0 16px;
+      padding: 14px 16px;
+      border-radius: 18px;
+      background: rgba(15, 118, 110, 0.08);
+      border: 1px solid rgba(15, 118, 110, 0.10);
+      color: var(--ink);
+      line-height: 1.7;
+      font-size: 14px;
+    }
+
+    .state-flow-diagram {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 120px minmax(0, 1fr) 120px minmax(0, 1fr) 120px minmax(0, 1fr);
+      gap: 12px;
+      align-items: center;
+      margin-bottom: 18px;
+    }
+
+    .state-node {
+      position: relative;
+      padding: 14px 14px 12px;
+      border-radius: 18px;
+      border: 1px solid rgba(22, 32, 36, 0.10);
+      background: rgba(255,255,255,0.52);
+      min-height: 132px;
+    }
+
+    .state-node.active {
+      border-color: rgba(15, 118, 110, 0.45);
+      background: linear-gradient(135deg, rgba(15, 118, 110, 0.16), rgba(255,255,255,0.86));
+      box-shadow: inset 0 0 0 1px rgba(15, 118, 110, 0.16);
+    }
+
+    .state-node.path-active:not(.active) {
+      border-color: rgba(15, 118, 110, 0.20);
+      background: linear-gradient(180deg, rgba(15, 118, 110, 0.08), rgba(255,255,255,0.78));
+    }
+
+    .state-badge {
+      display: inline-block;
+      margin-bottom: 8px;
+      padding: 4px 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      color: var(--accent-strong);
+      background: rgba(15, 118, 110, 0.10);
+    }
+
+    .state-name {
+      font-size: 16px;
+      margin-bottom: 8px;
+      font-weight: 700;
+    }
+
+    .state-score {
+      font-size: 24px;
+      line-height: 1;
+      margin-bottom: 10px;
+    }
+
+    .state-reason {
+      font-size: 12px;
+      line-height: 1.6;
+      color: var(--muted);
+    }
+
+    .flow-edge {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      min-height: 132px;
+    }
+
+    .flow-edge-label {
+      font-size: 12px;
+      color: var(--muted);
+      text-align: center;
+      line-height: 1.4;
+    }
+
+    .flow-edge-rail {
+      position: relative;
+      width: 100%;
+      height: 14px;
+    }
+
+    .flow-edge-rail::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      right: 14px;
+      top: 50%;
+      height: 2px;
+      transform: translateY(-50%);
+      background: rgba(22, 32, 36, 0.18);
+    }
+
+    .flow-edge-rail::after {
+      content: "";
+      position: absolute;
+      right: 2px;
+      top: 50%;
+      width: 9px;
+      height: 9px;
+      border-top: 2px solid rgba(22, 32, 36, 0.18);
+      border-right: 2px solid rgba(22, 32, 36, 0.18);
+      transform: translateY(-50%) rotate(45deg);
+    }
+
+    .flow-edge.active .flow-edge-label {
+      color: var(--accent-strong);
+    }
+
+    .flow-edge.active .flow-edge-rail::before {
+      background: linear-gradient(90deg, rgba(15, 118, 110, 0.55), rgba(15, 118, 110, 0.95));
+    }
+
+    .flow-edge.active .flow-edge-rail::after {
+      border-top-color: rgba(15, 118, 110, 0.95);
+      border-right-color: rgba(15, 118, 110, 0.95);
+    }
+
+    .state-compare-block {
+      margin-top: 8px;
+    }
+
+    .state-compare-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 12px;
+    }
+
+    .state-compare-card {
+      padding: 16px;
+      border-radius: 18px;
+      border: 1px solid rgba(22, 32, 36, 0.08);
+      background: rgba(255,255,255,0.58);
+    }
+
+    .state-compare-label {
+      font-size: 16px;
+      font-weight: 700;
+      margin-bottom: 6px;
+    }
+
+    .state-compare-score {
+      font-size: 12px;
+      color: var(--accent-strong);
+      margin-bottom: 8px;
+    }
+
+    .state-compare-reason {
+      font-size: 13px;
+      line-height: 1.7;
+      color: var(--muted);
+    }
+
     .table-wrap {
       overflow: auto;
       border-radius: 18px;
@@ -445,6 +654,34 @@ APP_HTML = """<!doctype html>
       .sidebar { position: static; }
       .detail-top,
       .results-grid { grid-template-columns: 1fr; }
+      .state-flow-diagram {
+        grid-template-columns: 1fr;
+      }
+      .flow-edge {
+        min-height: 58px;
+      }
+      .flow-edge-rail {
+        width: 20px;
+        height: 52px;
+      }
+      .flow-edge-rail::before {
+        left: 50%;
+        right: auto;
+        top: 0;
+        width: 2px;
+        height: calc(100% - 14px);
+        transform: translateX(-50%);
+      }
+      .flow-edge-rail::after {
+        top: auto;
+        bottom: 3px;
+        left: 50%;
+        right: auto;
+        transform: translateX(-50%) rotate(135deg);
+      }
+      .state-compare-grid {
+        grid-template-columns: 1fr;
+      }
       .form-grid,
       .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
@@ -522,6 +759,21 @@ APP_HTML = """<!doctype html>
           </section>
 
           <section id="results-panel" hidden>
+            <section id="state-flow-panel" class="state-flow-block" hidden>
+              <div class="detail-title">
+                <h3>状态图</h3>
+                <div class="meta" id="state-flow-current"></div>
+              </div>
+              <div class="state-flow-summary" id="state-flow-summary"></div>
+              <div class="state-flow-diagram" id="state-flow-diagram"></div>
+              <section id="state-compare-block" class="state-compare-block" hidden>
+                <div class="detail-title">
+                  <h3>为什么不是另外两个状态</h3>
+                  <div class="meta">看当前状态为什么压过其余两套持有/退出逻辑</div>
+                </div>
+                <div class="state-compare-grid" id="state-flow-compare"></div>
+              </section>
+            </section>
             <div class="summary-grid" id="result-metrics"></div>
             <div class="results-grid">
               <section class="result-block">
@@ -585,6 +837,34 @@ APP_HTML = """<!doctype html>
       const host = document.getElementById(hostId);
       host.innerHTML = '';
       (blocks || []).forEach((block) => {
+        if (block.type === 'table') {
+          const wrap = document.createElement('div');
+          wrap.className = 'markdown-table-wrap';
+          const table = document.createElement('table');
+          const thead = document.createElement('thead');
+          const tbody = document.createElement('tbody');
+          const headRow = document.createElement('tr');
+          (block.headers || []).forEach((header) => {
+            const th = document.createElement('th');
+            th.textContent = header;
+            headRow.appendChild(th);
+          });
+          thead.appendChild(headRow);
+          (block.rows || []).forEach((row) => {
+            const tr = document.createElement('tr');
+            row.forEach((cell) => {
+              const td = document.createElement('td');
+              td.textContent = cell;
+              tr.appendChild(td);
+            });
+            tbody.appendChild(tr);
+          });
+          table.appendChild(thead);
+          table.appendChild(tbody);
+          wrap.appendChild(table);
+          host.appendChild(wrap);
+          return;
+        }
         if (block.type === 'ul') {
           const ul = document.createElement('ul');
           (block.items || []).forEach((item) => {
@@ -733,18 +1013,94 @@ APP_HTML = """<!doctype html>
       const host = document.getElementById('result-metrics');
       const summary = result.summary || {};
       const backtest = result.backtest_summary || {};
-      const metrics = [
-        ['扫描日期', result.scan_date || '-'],
-        ['候选数', summary.n_resonance_candidates ?? result.candidate_count ?? 0],
-        ['入选数', summary.n_selected ?? result.selected_count ?? 0],
-        ['最终净值', backtest.final_nav ?? '-'],
-      ];
+      const metrics = result.state_flow
+        ? [
+            ['买点日期', summary.start_date || '-'],
+            ['扫描日期', result.scan_date || '-'],
+            ['当前状态', summary.current_state_label || '-'],
+            ['区间收益', summary.holding_return_pct === null || summary.holding_return_pct === undefined ? '-' : `${(Number(summary.holding_return_pct) * 100).toFixed(1)}%`],
+          ]
+        : [
+            ['扫描日期', result.scan_date || '-'],
+            ['候选数', summary.n_candidates ?? summary.n_resonance_candidates ?? result.candidate_count ?? 0],
+            ['入选数', summary.n_selected ?? result.selected_count ?? 0],
+            ['最终净值', backtest.final_nav ?? '-'],
+          ];
       host.innerHTML = metrics.map(([label, value]) => `
         <div class="metric">
           <div class="metric-label">${label}</div>
           <div class="metric-value">${fmt(value)}</div>
         </div>
       `).join('');
+    }
+
+    function renderStateFlow(result) {
+      const panel = document.getElementById('state-flow-panel');
+      const current = document.getElementById('state-flow-current');
+      const summaryHost = document.getElementById('state-flow-summary');
+      const diagram = document.getElementById('state-flow-diagram');
+      const compareBlock = document.getElementById('state-compare-block');
+      const compareHost = document.getElementById('state-flow-compare');
+      const flow = result.state_flow;
+      if (!flow || !flow.nodes || !flow.nodes.length) {
+        panel.hidden = true;
+        current.textContent = '';
+        summaryHost.textContent = '';
+        diagram.innerHTML = '';
+        compareBlock.hidden = true;
+        compareHost.innerHTML = '';
+        return;
+      }
+      panel.hidden = false;
+      current.textContent = `当前路径状态: ${flow.current_state_label || '-'}`;
+      const summaryParts = [
+        flow.start_date ? `买点: ${flow.start_date}` : '',
+        flow.path_judgement_label ? `路径结论: ${flow.path_judgement_label}` : '',
+        flow.current_reason || flow.current_advice || '',
+        flow.path_transition_summary ? `路径切换: ${flow.path_transition_summary}` : '',
+        flow.first_exit_date ? `首次退出确认: ${flow.first_exit_date}` : '',
+      ].filter(Boolean);
+      summaryHost.textContent = summaryParts.join(' ') || '当前状态图已更新。';
+      diagram.innerHTML = '';
+      const nodes = flow.nodes || [];
+      const edges = flow.edges || [];
+      nodes.forEach((node, index) => {
+        const card = document.createElement('div');
+        const pathActive = node.path_active ? ' path-active' : '';
+        const badge = node.active ? '当前' : (node.path_active ? '路径经过' : '候选状态');
+        card.className = 'state-node' + (node.active ? ' active' : '') + pathActive;
+        card.innerHTML = `
+          <div class="state-badge">${badge}</div>
+          <div class="state-name">${node.state_label || '-'}</div>
+          <div class="state-score">${fmt(node.state_score)}</div>
+          <div class="state-reason">${node.reason || '-'}${node.first_entry_date ? ` 首次进入: ${node.first_entry_date}。` : ''}${node.days_in_state ? ` 路径内共 ${fmt(node.days_in_state)} 天。` : ''}</div>
+        `;
+        diagram.appendChild(card);
+        if (index < edges.length) {
+          const edge = edges[index];
+          const arrow = document.createElement('div');
+          arrow.className = 'flow-edge' + (edge.active ? ' active' : '');
+          arrow.innerHTML = `
+            <div class="flow-edge-label">${edge.label || ''}</div>
+            <div class="flow-edge-rail"></div>
+          `;
+          diagram.appendChild(arrow);
+        }
+      });
+
+      const comparisons = flow.comparisons || [];
+      compareHost.innerHTML = '';
+      compareBlock.hidden = comparisons.length === 0;
+      comparisons.forEach((item) => {
+        const card = document.createElement('div');
+        card.className = 'state-compare-card';
+        card.innerHTML = `
+          <div class="state-compare-label">${item.state_label || '-'}</div>
+          <div class="state-compare-score">候选分数: ${fmt(item.state_score)}${item.score_gap !== null && item.score_gap !== undefined ? ` · 与当前差值: ${fmt(item.score_gap)}` : ''}</div>
+          <div class="state-compare-reason">${item.why_not || '-'}</div>
+        `;
+        compareHost.appendChild(card);
+      });
     }
 
     function renderTable(headId, bodyId, rows, columns) {
@@ -775,13 +1131,32 @@ APP_HTML = """<!doctype html>
 
     function renderApplyResult(result) {
       document.getElementById('results-panel').hidden = false;
+      renderStateFlow(result);
       renderMetrics(result);
       const selectedRows = result.selected_rows || [];
       const candidateRows = result.candidate_rows || [];
+      const summarySelectedColumns = ['股票名称', '股票代码', '选中原因', '操作建议'];
+      const strategyId = (state.current && (state.current.base_id || state.current.id)) || '';
+      const preferredSelectedColumns = strategyId.includes('entropy_bifurcation_setup')
+        ? ['selected_rank', 'symbol', 'name', 'industry', 'market', 'strategy_score', 'entropy_quality', 'bifurcation_quality', 'trigger_quality', 'breakout_10', 'amount', 'turnover_rate']
+        : ['selected_rank', 'symbol', 'name', 'industry', 'market', 'strategy_score', 'resonance_score', 'support_count', 'energy_term', 'amount', 'turnover_rate'];
+      const preferredCandidateColumns = strategyId.includes('uptrend_hold_state_flow')
+        ? ['state_label', 'active', 'activated_on_path', 'first_entry_date', 'last_entry_date', 'days_in_state', 'state_score', 'reason', 'entropy_reserve', 'disorder_pressure', 'expansion_thrust', 'directional_persistence', 'peak_extension_score', 'deceleration_score', 'fragility_score']
+        : strategyId.includes('rapid_expansion_exhaustion_exit')
+        ? ['symbol', 'name', 'start_date', 'scan_date', 'judgement', 'strategy_state', 'strategy_score', 'peak_extension_score', 'deceleration_score', 'fragility_score', 'first_exit_date', 'holding_return_pct']
+        : strategyId.includes('rapid_expansion_hold')
+        ? ['symbol', 'name', 'start_date', 'scan_date', 'judgement', 'strategy_state', 'strategy_score', 'expansion_thrust', 'acceptance_score', 'instability_risk', 'holding_return_pct']
+        : strategyId.includes('entropy_hold_judgement')
+        ? ['symbol', 'name', 'start_date', 'scan_date', 'judgement', 'strategy_state', 'strategy_score', 'disorder_pressure', 'first_exit_date', 'holding_return_pct']
+        : strategyId.includes('entropy_bifurcation_setup')
+        ? ['symbol', 'name', 'industry', 'market', 'strategy_score', 'entropy_quality', 'bifurcation_quality', 'trigger_quality', 'breakout_10', 'amount', 'turnover_rate']
+        : ['symbol', 'name', 'industry', 'market', 'strategy_score', 'resonance_score', 'support_count', 'energy_term', 'amount', 'turnover_rate'];
+      const selectedColumns = (selectedRows[0] ? summarySelectedColumns.filter((column) => column in selectedRows[0]) : []);
+      const candidateColumns = (candidateRows[0] ? preferredCandidateColumns.filter((column) => column in candidateRows[0]) : []);
       document.getElementById('selected-count').textContent = `${selectedRows.length} rows`;
       document.getElementById('candidate-count').textContent = `${candidateRows.length} rows`;
-      renderTable('selected-head', 'selected-body', selectedRows, ['selected_rank', 'symbol', 'name', 'industry', 'market', 'resonance_score', 'support_count', 'amount', 'turnover_rate']);
-      renderTable('candidate-head', 'candidate-body', candidateRows, ['symbol', 'name', 'industry', 'market', 'resonance_score', 'support_count', 'amount', 'turnover_rate']);
+      renderTable('selected-head', 'selected-body', selectedRows, selectedColumns.length ? selectedColumns : Object.keys(selectedRows[0] || {}).slice(0, 4));
+      renderTable('candidate-head', 'candidate-body', candidateRows, candidateColumns.length ? candidateColumns : Object.keys(candidateRows[0] || {}).slice(0, 10));
       document.getElementById('run-command').textContent = result.command_display || '';
       document.getElementById('run-log').textContent = result.log || 'No logs';
     }
@@ -811,6 +1186,11 @@ APP_HTML = """<!doctype html>
       renderBlocks('detail-params-doc', detail.readme.parameter_blocks || []);
       renderParamForm(detail);
       document.getElementById('results-panel').hidden = true;
+      document.getElementById('state-flow-panel').hidden = true;
+      document.getElementById('state-flow-summary').textContent = '';
+      document.getElementById('state-flow-diagram').innerHTML = '';
+      document.getElementById('state-compare-block').hidden = true;
+      document.getElementById('state-flow-compare').innerHTML = '';
       document.getElementById('run-status').textContent = 'Ready';
     }
 
@@ -887,42 +1267,73 @@ def _section_map(text: str) -> dict[str, str]:
 
 
 def _simple_markdown_blocks(text: str) -> list[dict[str, Any]]:
-    blocks: list[dict[str, Any]] = []
-    current: list[str] = []
-    mode: str | None = None
+  blocks: list[dict[str, Any]] = []
+  current: list[str] = []
+  mode: str | None = None
 
-    def flush() -> None:
-        nonlocal current, mode
-        if not current:
-            return
-        if mode == "ul":
-            items = [line[2:].strip() for line in current if line.startswith("- ")]
-            if items:
-                blocks.append({"type": "ul", "items": items})
-        else:
-            paragraph = " ".join(line.strip() for line in current if line.strip())
-            if paragraph:
-                blocks.append({"type": "p", "text": paragraph})
-        current = []
-        mode = None
+  def is_table_line(line: str) -> bool:
+    stripped = line.strip()
+    return stripped.count("|") >= 2 and not stripped.startswith("```")
 
-    for raw_line in text.splitlines():
-        line = raw_line.rstrip()
-        if not line.strip():
-            flush()
-            continue
-        if line.startswith("- "):
-            if mode not in {None, "ul"}:
-                flush()
-            mode = "ul"
-            current.append(line)
-        else:
-            if mode not in {None, "p"}:
-                flush()
-            mode = "p"
-            current.append(line)
-    flush()
-    return blocks
+  def split_table_line(line: str) -> list[str]:
+    stripped = line.strip().strip("|")
+    return [cell.strip() for cell in stripped.split("|")]
+
+  def is_separator_line(line: str) -> bool:
+    cells = split_table_line(line)
+    if not cells:
+      return False
+    return all(cell and set(cell) <= {":", "-", " "} for cell in cells)
+
+  def flush() -> None:
+    nonlocal current, mode
+    if not current:
+      return
+    if mode == "ul":
+      items = [line[2:].strip() for line in current if line.startswith("- ")]
+      if items:
+        blocks.append({"type": "ul", "items": items})
+    elif mode == "table":
+      lines = [line for line in current if line.strip()]
+      if len(lines) >= 2 and is_separator_line(lines[1]):
+        headers = split_table_line(lines[0])
+        rows = [split_table_line(line) for line in lines[2:] if not is_separator_line(line)]
+        if headers and rows:
+          blocks.append({"type": "table", "headers": headers, "rows": rows})
+      else:
+        paragraph = " ".join(line.strip() for line in current if line.strip())
+        if paragraph:
+          blocks.append({"type": "p", "text": paragraph})
+    else:
+      paragraph = " ".join(line.strip() for line in current if line.strip())
+      if paragraph:
+        blocks.append({"type": "p", "text": paragraph})
+    current = []
+    mode = None
+
+  for raw_line in text.splitlines():
+    line = raw_line.rstrip()
+    if not line.strip():
+      flush()
+      continue
+    if is_table_line(line):
+      if mode not in {None, "table"}:
+        flush()
+      mode = "table"
+      current.append(line)
+      continue
+    if line.startswith("- "):
+      if mode not in {None, "ul"}:
+        flush()
+      mode = "ul"
+      current.append(line)
+    else:
+      if mode not in {None, "p"}:
+        flush()
+      mode = "p"
+      current.append(line)
+  flush()
+  return blocks
 
 
 def _extract_tagline(description_text: str) -> str:
@@ -961,6 +1372,35 @@ def _parse_readme_parameter_help(parameter_text: str) -> dict[str, str]:
         for option in raw_options:
             result[option] = help_text
     return result
+
+
+def _variant_label(variant_name: str) -> str:
+    return STRATEGY_VARIANT_LABELS.get(str(variant_name), str(variant_name))
+
+
+def _variant_tagline(variant_name: str) -> str:
+    return STRATEGY_VARIANT_TAGLINES.get(str(variant_name), str(variant_name))
+
+
+def _strategy_label(strategy_id: str, fallback: str) -> str:
+  return STRATEGY_LABELS.get(str(strategy_id), fallback)
+
+
+def _strategy_tagline(strategy_id: str, fallback: str) -> str:
+  return STRATEGY_TAGLINES.get(str(strategy_id), fallback)
+
+
+def _with_variant_readme(readme: dict[str, Any], variant_name: str) -> dict[str, Any]:
+    variant_label = _variant_label(variant_name)
+    variant_tagline = _variant_tagline(variant_name)
+    description_blocks = [{"type": "p", "text": variant_tagline}]
+    description_blocks.extend(readme.get("description_blocks", []))
+    return {
+        **readme,
+        "tagline": variant_tagline,
+        "description_blocks": description_blocks,
+        "variant_label": variant_label,
+    }
 
 
 def _import_strategy_module(module_path: Path, strategy_id: str):
@@ -1070,13 +1510,24 @@ def _parameter_definitions(entrypoint_path: Path, strategy_id: str, readme_help:
     return params
 
 
+def _strategy_variants(parameters: list[dict[str, Any]]) -> list[str]:
+    for param in parameters:
+        if param.get("dest") == "strategy_name":
+            choices = [str(choice) for choice in param.get("choices") or [] if str(choice).strip()]
+            if choices:
+                return choices
+    return []
+
+
 def _discover_strategies() -> list[dict[str, Any]]:
     strategies: list[dict[str, Any]] = []
     if not STRATEGY_ROOT.exists():
         return strategies
 
-    for readme_path in sorted(STRATEGY_ROOT.rglob("README.md")):
-        strategy_dir = readme_path.parent
+    for strategy_dir in sorted(path for path in STRATEGY_ROOT.iterdir() if path.is_dir()):
+        readme_path = strategy_dir / "README.md"
+        if not readme_path.exists():
+            continue
         relative_path = strategy_dir.relative_to(REPO_ROOT)
         entrypoints = sorted(strategy_dir.glob("run_*.py"))
         if not entrypoints:
@@ -1085,17 +1536,42 @@ def _discover_strategies() -> list[dict[str, Any]]:
         readme = _extract_readme_metadata(readme_path)
         parameter_help = _parse_readme_parameter_help(readme["parameter_text"])
         parameters = _parameter_definitions(entrypoints[0], strategy_id, parameter_help)
+        variants = _strategy_variants(parameters)
+        if variants:
+            visible_parameters = [param for param in parameters if param.get("dest") != "strategy_name"]
+            for variant in variants:
+                variant_id = f"{strategy_id}--{variant}"
+                strategies.append(
+                    {
+                        "id": variant_id,
+                        "base_id": strategy_id,
+                        "display_name": f"{strategy_dir.name} / {_variant_label(variant)}",
+                        "relative_path": f"{relative_path}#{variant}",
+                        "directory": strategy_dir,
+                        "readme_path": readme_path,
+                        "entrypoint_path": entrypoints[0],
+                        "readme": _with_variant_readme(readme, variant),
+                        "parameters": visible_parameters,
+                        "command_parameters": parameters,
+                        "fixed_values": {"strategy_name": variant},
+                    }
+                )
+            continue
+
         strategies.append(
-            {
-                "id": strategy_id,
-                "display_name": strategy_dir.name,
-                "relative_path": str(relative_path),
-                "directory": strategy_dir,
-                "readme_path": readme_path,
-                "entrypoint_path": entrypoints[0],
-                "readme": readme,
-                "parameters": parameters,
-            }
+          {
+            "id": strategy_id,
+            "base_id": strategy_id,
+            "display_name": _strategy_label(strategy_id, strategy_dir.name),
+            "relative_path": str(relative_path),
+            "directory": strategy_dir,
+            "readme_path": readme_path,
+            "entrypoint_path": entrypoints[0],
+            "readme": {**readme, "tagline": _strategy_tagline(strategy_id, readme.get("tagline", ""))},
+            "parameters": parameters,
+            "command_parameters": parameters,
+            "fixed_values": {},
+          }
         )
     return strategies
 
@@ -1120,12 +1596,15 @@ def _find_existing(output_dir: Path, patterns: list[str]) -> Path | None:
 
 
 def _load_bundle(output_dir: Path, scan_date: str) -> dict[str, pd.DataFrame]:
-    selected_path = _find_existing(output_dir, [f"selected_portfolio_{scan_date}_top*.csv"])
+    summary_path = _find_existing(output_dir, [f"resonance_summary_{scan_date}.csv", f"strategy_summary_*_{scan_date}.csv"])
+    selected_path = _find_existing(output_dir, [f"selected_portfolio_{scan_date}_top*.csv", f"selected_portfolio_*_{scan_date}_top*.csv"])
+    candidates_path = _find_existing(output_dir, [f"resonance_candidates_{scan_date}_all.csv", f"*_candidates_{scan_date}_all.csv"])
+    backtest_summary_path = _find_existing(output_dir, [f"forward_backtest_summary_{scan_date}.csv", f"forward_backtest_summary_*_{scan_date}.csv"])
     return {
-        "summary": _read_csv(output_dir / f"resonance_summary_{scan_date}.csv"),
+        "summary": _read_csv(summary_path) if summary_path else pd.DataFrame(),
         "selected": _read_csv(selected_path) if selected_path else pd.DataFrame(),
-        "candidates": _read_csv(output_dir / f"resonance_candidates_{scan_date}_all.csv"),
-        "backtest_summary": _read_csv(output_dir / f"forward_backtest_summary_{scan_date}.csv"),
+        "candidates": _read_csv(candidates_path) if candidates_path else pd.DataFrame(),
+        "backtest_summary": _read_csv(backtest_summary_path) if backtest_summary_path else pd.DataFrame(),
     }
 
 
@@ -1146,6 +1625,7 @@ def _resolve_strategy(strategy_id: str) -> dict[str, Any]:
 def _serialize_strategy(strategy: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": strategy["id"],
+    "base_id": strategy.get("base_id", strategy["id"]),
         "display_name": strategy["display_name"],
         "relative_path": strategy["relative_path"],
         "tagline": strategy["readme"].get("tagline", ""),
@@ -1155,6 +1635,7 @@ def _serialize_strategy(strategy: dict[str, Any]) -> dict[str, Any]:
 def _serialize_strategy_detail(strategy: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": strategy["id"],
+    "base_id": strategy.get("base_id", strategy["id"]),
         "display_name": strategy["display_name"],
         "relative_path": strategy["relative_path"],
         "readme": {
@@ -1168,14 +1649,14 @@ def _serialize_strategy_detail(strategy: dict[str, Any]) -> dict[str, Any]:
 
 def _build_command(strategy: dict[str, Any], values: dict[str, Any]) -> tuple[list[str], str, Path]:
     command = [sys.executable, str(strategy["entrypoint_path"])]
-    effective_values = dict(values)
+    effective_values = {**strategy.get("fixed_values", {}), **dict(values)}
 
     out_dir_value = effective_values.get("out_dir") or _default_value_for_dest(strategy["id"], "out_dir")
     effective_values["out_dir"] = out_dir_value
     output_dir = Path(str(out_dir_value)).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    for param in strategy["parameters"]:
+    for param in strategy.get("command_parameters", strategy["parameters"]):
         dest = param["dest"]
         value = effective_values.get(dest, param.get("default"))
         if param["kind"] == "boolean":
@@ -1199,6 +1680,287 @@ def _build_command(strategy: dict[str, Any], values: dict[str, Any]) -> tuple[li
     return command, " ".join(command), output_dir
 
 
+def _fmt_pct(value: Any, digits: int = 1) -> str:
+  try:
+    number = float(value)
+  except (TypeError, ValueError):
+    return "-"
+  if pd.isna(number):
+    return "-"
+  return f"{number * 100.0:.{digits}f}%"
+
+
+def _fmt_num(value: Any, digits: int = 2) -> str:
+  try:
+    number = float(value)
+  except (TypeError, ValueError):
+    return "-"
+  if pd.isna(number):
+    return "-"
+  return f"{number:.{digits}f}"
+
+
+def _strategy_variant(strategy: dict[str, Any]) -> str:
+  fixed_values = strategy.get("fixed_values", {})
+  return str(fixed_values.get("strategy_name") or strategy.get("base_id") or strategy.get("id") or "")
+
+
+STATE_FLOW_ORDER = [
+  "observation",
+  "entropy_hold_judgement",
+  "rapid_expansion_hold",
+  "rapid_expansion_exhaustion_exit",
+]
+STATE_FLOW_EDGES = [
+  ("observation", "entropy_hold_judgement", "低熵重组"),
+  ("entropy_hold_judgement", "rapid_expansion_hold", "扩张推力建立"),
+  ("rapid_expansion_hold", "rapid_expansion_exhaustion_exit", "高位降速与脆弱化"),
+]
+
+
+def _float_or_none(value: Any) -> float | None:
+  try:
+    number = float(value)
+  except (TypeError, ValueError):
+    return None
+  if pd.isna(number):
+    return None
+  return number
+
+
+def _state_flow_why_not(target_state_id: str, row: dict[str, Any], current_state_id: str) -> str:
+  score_text = _fmt_num(row.get("state_score"))
+  if target_state_id == "entropy_hold_judgement":
+    return (
+      f"不是“熵秩序持有”，因为低熵储备 {_fmt_num(row.get('entropy_reserve'))} 偏低，"
+      f"乱序压力 {_fmt_num(row.get('disorder_pressure'))} 偏高；这说明结构已经不再是稳定低熵段，"
+      f"该状态分数只有 {score_text}。"
+    )
+  if target_state_id == "rapid_expansion_hold":
+    if current_state_id == "rapid_expansion_exhaustion_exit":
+      return (
+        f"不是“快速扩张持有”，因为虽然扩张推力 {_fmt_num(row.get('expansion_thrust'))} 仍在，"
+        f"但当前已经从纯扩张推进转向末端降速与脆弱化，单看扩张持有分数只有 {score_text}。"
+      )
+    return (
+      f"不是“快速扩张持有”，因为扩张推力 {_fmt_num(row.get('expansion_thrust'))}、"
+      f"方向持续性 {_fmt_num(row.get('directional_persistence'))} 或承接强度 {_fmt_num(row.get('acceptance_score'))} 还不足以接管当前结构；"
+      f"该状态分数只有 {score_text}。"
+    )
+  if target_state_id == "rapid_expansion_exhaustion_exit":
+    if current_state_id == "rapid_expansion_hold":
+      return (
+        f"不是“快速扩张衰竭退出”，因为虽然高位扩张分数 {_fmt_num(row.get('peak_extension_score'))} 不低，"
+        f"但降速分数 {_fmt_num(row.get('deceleration_score'))} 和脆弱度 {_fmt_num(row.get('fragility_score'))} 还没达到衰竭确认。"
+      )
+    return (
+      f"不是“快速扩张衰竭退出”，因为高位扩张分数 {_fmt_num(row.get('peak_extension_score'))}、"
+      f"降速分数 {_fmt_num(row.get('deceleration_score'))}、脆弱度 {_fmt_num(row.get('fragility_score'))} 还没有同时形成退出共振；"
+      f"该状态分数只有 {score_text}。"
+    )
+  return str(row.get("reason") or "当前证据还不足以支持这个状态。")
+
+
+def _state_flow_comparisons(current_state_id: str, candidate_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+  node_map = {str(row.get("state_id")): row for row in candidate_rows if row.get("state_id")}
+  current_score = _float_or_none(node_map.get(current_state_id, {}).get("state_score"))
+  compare_ids = [
+    state_id
+    for state_id in ["entropy_hold_judgement", "rapid_expansion_hold", "rapid_expansion_exhaustion_exit"]
+    if state_id != current_state_id and state_id in node_map
+  ]
+  comparisons: list[dict[str, Any]] = []
+  for state_id in compare_ids:
+    row = node_map[state_id]
+    score = _float_or_none(row.get("state_score"))
+    comparisons.append(
+      {
+        "state_id": state_id,
+        "state_label": row.get("state_label") or state_id,
+        "state_score": row.get("state_score"),
+        "score_gap": None if score is None or current_score is None else current_score - score,
+        "why_not": _state_flow_why_not(state_id, row, current_state_id),
+      }
+    )
+  return comparisons
+
+
+def _state_flow_payload(summary: dict[str, Any], candidate_rows: list[dict[str, Any]]) -> dict[str, Any]:
+  node_map = {str(row.get("state_id")): dict(row) for row in candidate_rows if row.get("state_id")}
+  current_state_id = str(summary.get("current_state_id") or "")
+  current_index = STATE_FLOW_ORDER.index(current_state_id) if current_state_id in STATE_FLOW_ORDER else 0
+  has_path_activation = any("activated_on_path" in row for row in candidate_rows)
+
+  def _row_path_active(row: dict[str, Any], index: int) -> bool:
+    if has_path_activation:
+      return bool(row.get("activated_on_path"))
+    return index <= current_index
+
+  ordered_nodes: list[dict[str, Any]] = []
+  for index, state_id in enumerate(STATE_FLOW_ORDER):
+    row = node_map.get(state_id, {"state_id": state_id, "state_label": state_id, "state_score": None, "reason": ""})
+    row["path_active"] = _row_path_active(row, index)
+    ordered_nodes.append(row)
+
+  return {
+    "start_date": summary.get("start_date"),
+    "current_state_id": current_state_id,
+    "current_state_label": summary.get("current_state_label"),
+    "current_reason": summary.get("current_state_reason"),
+    "current_advice": summary.get("state_advice"),
+    "path_judgement": summary.get("path_judgement"),
+    "path_judgement_label": summary.get("path_judgement_label"),
+    "first_exit_date": summary.get("first_exit_date"),
+    "path_transition_summary": summary.get("path_transition_summary"),
+    "nodes": ordered_nodes,
+    "edges": [
+      {
+        "from": source,
+        "to": target,
+        "label": label,
+        "active": (
+          bool(node_map.get(source, {}).get("activated_on_path"))
+          and bool(node_map.get(target, {}).get("activated_on_path"))
+          and (
+            not node_map.get(source, {}).get("first_entry_date")
+            or not node_map.get(target, {}).get("first_entry_date")
+            or str(node_map.get(source, {}).get("first_entry_date")) <= str(node_map.get(target, {}).get("first_entry_date"))
+          )
+        ) if has_path_activation else (current_state_id in STATE_FLOW_ORDER and current_index >= STATE_FLOW_ORDER.index(target)),
+      }
+      for source, target, label in STATE_FLOW_EDGES
+    ],
+    "comparisons": _state_flow_comparisons(current_state_id, candidate_rows),
+  }
+
+
+def _selected_reason_text(row: dict[str, Any], strategy: dict[str, Any]) -> str:
+  variant = _strategy_variant(strategy)
+  if variant == "compression_breakout":
+    return (
+      f"波动压缩后开始突破，20日突破幅度 {_fmt_pct(row.get('breakout_20'))}，"
+      f"压缩强度 {_fmt_num(row.get('compression_z_120'))}，策略分数 {_fmt_num(row.get('strategy_score'))}。"
+    )
+  if variant == "self_organized_trend":
+    return (
+      f"趋势结构已成型，20日收益 {_fmt_pct(row.get('ret_20'))}，60日收益 {_fmt_pct(row.get('ret_60'))}，"
+      f"策略分数 {_fmt_num(row.get('strategy_score'))}。"
+    )
+  if variant == "fractal_pullback":
+    return (
+      f"母趋势中完成回踩并出现再启动，回踩深度 {_fmt_pct(row.get('pullback_depth_8'))}，"
+      f"策略分数 {_fmt_num(row.get('strategy_score'))}。"
+    )
+  if variant == "market_energy_flow":
+    return (
+      f"资金与成交活跃度同步增强，20日收益 {_fmt_pct(row.get('ret_20'))}，"
+      f"能量脉冲 {_fmt_num(row.get('energy_impulse'))}，策略分数 {_fmt_num(row.get('strategy_score'))}。"
+    )
+  if variant == "entropy_bifurcation_setup":
+    return (
+      f"当前处于低熵压缩后启动区，熵质量 {_fmt_num(row.get('entropy_quality'))}，"
+      f"分叉质量 {_fmt_num(row.get('bifurcation_quality'))}，触发质量 {_fmt_num(row.get('trigger_quality'))}。"
+    )
+  if variant == "entropy_hold_judgement":
+    if bool(row.get("strategy_state")):
+      return (
+        f"自 {row.get('start_date') or '-'} 以来，未出现持续性的高熵乱序与动力记忆坍缩，"
+        f"当前持有分数 {_fmt_num(row.get('hold_score') or row.get('strategy_score'))}，"
+        f"乱序压力 {_fmt_num(row.get('disorder_pressure'))}。"
+      )
+    return (
+      f"自 {row.get('start_date') or '-'} 起在 {row.get('first_exit_date') or '未知日期'} 出现持续性的高熵乱序与记忆坍缩，"
+      f"当前持有分数 {_fmt_num(row.get('hold_score') or row.get('strategy_score'))}，"
+      f"乱序压力 {_fmt_num(row.get('disorder_pressure'))}。"
+    )
+  if variant == "rapid_expansion_hold":
+    if bool(row.get("strategy_state")):
+      return (
+        f"自 {row.get('start_date') or '-'} 以来仍处于快速扩张上行段，"
+        f"扩张推力 {_fmt_num(row.get('expansion_thrust'))}，方向持续性 {_fmt_num(row.get('directional_persistence'))}，"
+        f"风险强度 {_fmt_num(row.get('instability_risk'))}。"
+      )
+    return (
+      f"自 {row.get('start_date') or '-'} 起在 {row.get('first_exit_date') or '未知日期'} 出现扩张推力衰减与风险过载，"
+      f"扩张推力 {_fmt_num(row.get('expansion_thrust'))}，风险强度 {_fmt_num(row.get('instability_risk'))}。"
+    )
+  if variant == "rapid_expansion_exhaustion_exit":
+    if bool(row.get("strategy_state")):
+      return (
+        f"当前虽处于强扩张后段，但尚未形成衰竭退出确认，"
+        f"高位扩张分数 {_fmt_num(row.get('peak_extension_score'))}，降速分数 {_fmt_num(row.get('deceleration_score'))}，"
+        f"脆弱度 {_fmt_num(row.get('fragility_score'))}。"
+      )
+    return (
+      f"自 {row.get('start_date') or '-'} 起在 {row.get('first_exit_date') or '未知日期'} 进入快速扩张末端衰竭区，"
+      f"高位扩张分数 {_fmt_num(row.get('peak_extension_score'))}，降速分数 {_fmt_num(row.get('deceleration_score'))}，"
+      f"脆弱度 {_fmt_num(row.get('fragility_score'))}。"
+    )
+  if variant == "uptrend_hold_state_flow":
+    start_date = row.get("start_date") or "-"
+    current_state = row.get("current_state_label") or "-"
+    reason = row.get("current_state_reason") or current_state
+    transitions = row.get("path_transition_summary") or ""
+    transition_text = f" 状态切换: {transitions}。" if transitions else ""
+    return f"自 {start_date} 买入后，路径当前处于 {current_state}；{reason}。{transition_text}"
+  if row.get("resonance_score") is not None:
+    return f"多周期共振分数 {_fmt_num(row.get('resonance_score'))}，结构与能量项同时满足入选条件。"
+  return f"策略分数 {_fmt_num(row.get('strategy_score'))}，满足当前策略的核心筛选条件。"
+
+
+def _selected_advice_text(row: dict[str, Any], strategy: dict[str, Any], values: dict[str, Any]) -> str:
+  hold_days = values.get("hold_days")
+  if hold_days in {None, ""}:
+    hold_days = 5
+  try:
+    hold_days_int = int(hold_days)
+  except (TypeError, ValueError):
+    hold_days_int = 5
+
+  variant = _strategy_variant(strategy)
+  base = f"建议以 {hold_days_int} 个交易日作为基础持有周期。"
+  if variant == "entropy_bifurcation_setup":
+    return base + " 若突破动能回落，或重新跌回 20 日线下方，可提前止盈/止损。"
+  if variant == "entropy_hold_judgement":
+    if bool(row.get("strategy_state")):
+      return base + " 当前可继续持有；只有当高熵乱序连续积累且动力记忆持续坍缩时，再考虑退出。"
+    return "当前不建议按这套熵持有逻辑继续一致持有；更合理的是等待新的低熵重组后再评估。"
+  if variant == "rapid_expansion_hold":
+    if bool(row.get("strategy_state")):
+      return base + " 当前仍属于快速扩张持有区；重点盯住扩张推力是否明显衰减，以及风险强度是否持续高于承接强度。"
+    return "当前不建议继续按快速扩张逻辑持有；更合理的是等待推力重新建立，或回到新的整理重组后再评估。"
+  if variant == "rapid_expansion_exhaustion_exit":
+    if bool(row.get("strategy_state")):
+      return base + " 当前尚未确认末端衰竭退出；重点观察推力回落是否继续扩大，并留意承接与方向连续性是否同步转弱。"
+    return "当前已出现快速扩张末端的降速退出信号；更合理的是主动降仓或退出，而不是再按加速段逻辑继续持有。"
+  if variant == "uptrend_hold_state_flow":
+    prefix = str(row.get("path_judgement_label") or "路径结论已更新")
+    return f"{prefix}。{str(row.get('state_advice') or '根据当前路径状态继续跟踪相邻状态的切换条件。')}"
+  if variant == "compression_breakout":
+    return base + " 若突破次日不能延续放量，或重新回到整理区间，可考虑提前退出。"
+  if variant == "self_organized_trend":
+    return base + " 若 20 日线转弱或趋势斜率明显放缓，可分批止盈。"
+  if variant == "fractal_pullback":
+    return base + " 若再启动失败并跌破短期整理低点，可优先离场。"
+  if variant == "market_energy_flow":
+    return base + " 若资金强度回落且相对强度掉队，可降低仓位或退出。"
+  return base + " 若核心触发条件消失，可提前结束持有。"
+
+
+def _selected_display_rows(selected_rows: list[dict[str, Any]], strategy: dict[str, Any], values: dict[str, Any]) -> list[dict[str, Any]]:
+  display_rows: list[dict[str, Any]] = []
+  for row in selected_rows:
+    display_rows.append(
+      {
+        "股票名称": row.get("name") or row.get("ts_code") or row.get("symbol") or "-",
+        "股票代码": row.get("symbol") or row.get("ts_code") or "-",
+        "选中原因": _selected_reason_text(row, strategy),
+        "操作建议": _selected_advice_text(row, strategy, values),
+      }
+    )
+  return display_rows
+
+
 def _run_strategy(strategy: dict[str, Any], values: dict[str, Any]) -> dict[str, Any]:
     command, command_display, output_dir = _build_command(strategy, values)
     completed = subprocess.run(
@@ -1217,15 +1979,19 @@ def _run_strategy(strategy: dict[str, Any], values: dict[str, Any]) -> dict[str,
     bundle = _load_bundle(output_dir, scan_date) if scan_date else {"summary": pd.DataFrame(), "selected": pd.DataFrame(), "candidates": pd.DataFrame(), "backtest_summary": pd.DataFrame()}
     summary_rows = _normalize_rows(bundle.get("summary", pd.DataFrame()), 1)
     backtest_summary_rows = _normalize_rows(bundle.get("backtest_summary", pd.DataFrame()), 1)
-    selected_rows = _normalize_rows(bundle.get("selected", pd.DataFrame()), 100)
+    raw_selected_rows = _normalize_rows(bundle.get("selected", pd.DataFrame()), 100)
+    selected_rows = _selected_display_rows(raw_selected_rows, strategy, values)
     candidate_rows = _normalize_rows(bundle.get("candidates", pd.DataFrame()), 100)
     return {
         "ok": True,
+        "strategy_id": strategy.get("id"),
+        "base_id": strategy.get("base_id", strategy.get("id")),
         "scan_date": scan_date,
         "summary": summary_rows[0] if summary_rows else {},
         "backtest_summary": backtest_summary_rows[0] if backtest_summary_rows else {},
         "selected_rows": selected_rows,
         "candidate_rows": candidate_rows,
+        "state_flow": _state_flow_payload(summary_rows[0], candidate_rows) if strategy.get("base_id") == "uptrend_hold_state_flow" and summary_rows else None,
         "selected_count": len(selected_rows),
         "candidate_count": len(candidate_rows),
         "command_display": command_display,

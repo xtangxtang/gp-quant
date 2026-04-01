@@ -21,7 +21,7 @@ STRATEGY_LABELS = {
   "uptrend_hold_state_flow": "上升趋势持有状态图",
 }
 STRATEGY_TAGLINES = {
-  "entropy_bifurcation_setup": "在低熵压缩态中，用临界慢化和突破触发去捕捉分叉启动时刻。",
+  "entropy_bifurcation_setup": "用市场门控、低熵压缩、分叉触发和分段执行去筛选启动股。",
   "uptrend_hold_state_flow": "把上升趋势里的熵秩序持有、快速扩张持有、快速扩张衰竭退出放进一张状态图里，从买点开始评估整段持有路径。",
 }
 STRATEGY_VARIANT_LABELS = {
@@ -35,6 +35,30 @@ STRATEGY_VARIANT_TAGLINES = {
   "self_organized_trend": "资金持续注入后的顺势跟随与强者恒强筛选。",
   "fractal_pullback": "在大级别上升趋势里寻找缩量回踩后的再启动。",
   "market_energy_flow": "从横截面资金能量与行业共振中筛选领先方向。",
+}
+MARKET_PHASE_LABELS = {
+  "compression": "低熵压缩",
+  "transition": "临界过渡",
+  "expansion": "启动扩张",
+  "distorted": "相位失真",
+  "neutral": "中性观察",
+  "abandon": "放弃交易",
+}
+ENTRY_MODE_LABELS = {
+  "skip": "跳过",
+  "probe": "试探建仓",
+  "staged": "分段建仓",
+  "full": "直接建仓",
+}
+EXIT_MODE_LABELS = {
+  "abandon": "直接放弃",
+  "reduce": "减仓观察",
+  "trail": "跟踪退出",
+}
+EXECUTION_STATE_LABELS = {
+  "normal": "执行正常",
+  "cautious": "谨慎执行",
+  "blocked": "执行阻断",
 }
 
 
@@ -339,6 +363,193 @@ APP_HTML = """<!doctype html>
       color: var(--muted);
       font-size: 11px;
       line-height: 1.5;
+    }
+
+    .param-timeline-block {
+      margin-top: 18px;
+      padding: 16px;
+      border-radius: 20px;
+      border: 1px solid rgba(22, 32, 36, 0.08);
+      background: rgba(255,255,255,0.42);
+    }
+
+    .param-timeline-summary {
+      margin: 10px 0 16px;
+      padding: 14px 16px;
+      border-radius: 18px;
+      background: rgba(15, 118, 110, 0.08);
+      border: 1px solid rgba(15, 118, 110, 0.10);
+      color: var(--ink);
+      line-height: 1.7;
+      font-size: 14px;
+    }
+
+    .param-timeline-lanes {
+      display: grid;
+      gap: 16px;
+    }
+
+    .param-timeline-lane {
+      display: grid;
+      grid-template-columns: 132px minmax(0, 1fr);
+      gap: 14px;
+      align-items: start;
+    }
+
+    .param-timeline-label {
+      padding-top: 6px;
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    .param-timeline-track {
+      position: relative;
+      min-height: 88px;
+      padding-top: 10px;
+      padding-bottom: 26px;
+    }
+
+    .param-timeline-rail {
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 38px;
+      height: 2px;
+      border-radius: 999px;
+      background: rgba(22, 32, 36, 0.18);
+    }
+
+    .param-timeline-window {
+      position: absolute;
+      top: 32px;
+      height: 14px;
+      border-radius: 999px;
+      background: rgba(15, 118, 110, 0.12);
+      border: 1px solid rgba(15, 118, 110, 0.18);
+    }
+
+    .param-timeline-hold {
+      position: absolute;
+      top: 32px;
+      height: 14px;
+      border-radius: 999px;
+      background: linear-gradient(90deg, rgba(180, 83, 9, 0.16), rgba(15, 118, 110, 0.28));
+    }
+
+    .param-timeline-hold::after {
+      content: "";
+      position: absolute;
+      right: 1px;
+      top: 50%;
+      width: 10px;
+      height: 10px;
+      border-top: 2px solid rgba(180, 83, 9, 0.84);
+      border-right: 2px solid rgba(180, 83, 9, 0.84);
+      transform: translateY(-50%) rotate(45deg);
+    }
+
+    .param-timeline-marker {
+      position: absolute;
+      top: 0;
+      transform: translateX(-50%);
+      width: max-content;
+      max-width: 132px;
+      text-align: center;
+    }
+
+    .param-timeline-dot {
+      display: block;
+      width: 11px;
+      height: 11px;
+      margin: 0 auto 8px;
+      border-radius: 50%;
+      border: 2px solid rgba(15, 118, 110, 0.72);
+      background: rgba(255,255,255,0.88);
+      box-shadow: 0 0 0 4px rgba(15, 118, 110, 0.10);
+    }
+
+    .param-timeline-marker.scan .param-timeline-dot {
+      background: var(--accent);
+      border-color: var(--accent);
+      box-shadow: 0 0 0 4px rgba(15, 118, 110, 0.16);
+    }
+
+    .param-timeline-marker.hold .param-timeline-dot {
+      background: var(--warm);
+      border-color: var(--warm);
+      box-shadow: 0 0 0 4px rgba(180, 83, 9, 0.10);
+    }
+
+    .param-timeline-marker.muted .param-timeline-dot {
+      background: rgba(255,255,255,0.54);
+      border-color: rgba(22, 32, 36, 0.24);
+      box-shadow: none;
+    }
+
+    .param-timeline-marker-label {
+      font-size: 11px;
+      color: var(--muted);
+      line-height: 1.4;
+    }
+
+    .param-timeline-marker-value {
+      margin-top: 2px;
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--ink);
+      line-height: 1.45;
+    }
+
+    .param-timeline-track-note {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      font-size: 12px;
+      line-height: 1.55;
+      color: var(--muted);
+    }
+
+    .param-timeline-track-note.warning {
+      color: var(--bad);
+    }
+
+    .param-timeline-notes {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 16px;
+    }
+
+    .param-timeline-note {
+      padding: 14px;
+      border-radius: 16px;
+      border: 1px solid rgba(22, 32, 36, 0.08);
+      background: rgba(255,255,255,0.48);
+    }
+
+    .param-timeline-note-label {
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+
+    .param-timeline-note-value {
+      font-size: 18px;
+      font-weight: 700;
+      color: var(--ink);
+      margin-bottom: 6px;
+      line-height: 1.2;
+    }
+
+    .param-timeline-note-detail {
+      font-size: 13px;
+      line-height: 1.6;
+      color: var(--muted);
     }
 
     input, select, textarea {
@@ -682,6 +893,9 @@ APP_HTML = """<!doctype html>
       .state-compare-grid {
         grid-template-columns: 1fr;
       }
+      .param-timeline-notes {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
       .form-grid,
       .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
@@ -690,8 +904,371 @@ APP_HTML = """<!doctype html>
       .shell { padding: 16px 12px 28px; }
       .form-grid,
       .summary-grid { grid-template-columns: 1fr; }
+      .param-timeline-lane,
+      .param-timeline-notes {
+        grid-template-columns: 1fr;
+      }
+      .param-timeline-label {
+        padding-top: 0;
+      }
+      .param-timeline-track {
+        min-height: 104px;
+      }
       .hero { padding: 20px 18px; }
       .content { padding: 16px; }
+    }
+  </style>
+  <style>
+    :root {
+      color-scheme: dark;
+      --paper: #09131a;
+      --paper-strong: #10212a;
+      --ink: #e9f4ef;
+      --muted: #93a9b2;
+      --line: rgba(121, 164, 173, 0.18);
+      --line-strong: rgba(121, 164, 173, 0.32);
+      --card: linear-gradient(180deg, rgba(11, 19, 26, 0.96), rgba(6, 12, 17, 0.88));
+      --panel-soft: rgba(11, 19, 26, 0.78);
+      --accent: #2dd4bf;
+      --accent-strong: #9af2dd;
+      --accent-soft: rgba(45, 212, 191, 0.14);
+      --warm: #f6b85f;
+      --good: #5be38c;
+      --bad: #ff7a7a;
+      --shadow: 0 28px 90px rgba(0, 0, 0, 0.42);
+      --code-bg: #081118;
+      --code-ink: #d8f7ef;
+      --table-head: #12202a;
+    }
+
+    body {
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 14% 18%, rgba(246, 184, 95, 0.13), transparent 18%),
+        radial-gradient(circle at 86% 8%, rgba(45, 212, 191, 0.12), transparent 22%),
+        radial-gradient(circle at 50% 120%, rgba(89, 132, 255, 0.10), transparent 32%),
+        linear-gradient(180deg, #071017 0%, #09141b 42%, #061017 100%);
+      font-family: "IBM Plex Serif", "Noto Serif SC", Georgia, serif;
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background:
+        linear-gradient(rgba(154, 242, 221, 0.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(154, 242, 221, 0.03) 1px, transparent 1px);
+      background-size: 34px 34px;
+      mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.42), transparent 92%);
+      opacity: 0.45;
+    }
+
+    .shell {
+      position: relative;
+      z-index: 1;
+    }
+
+    .hero,
+    .panel {
+      background: var(--card);
+      border-color: var(--line);
+      box-shadow: var(--shadow);
+    }
+
+    .hero::after {
+      background: radial-gradient(circle, rgba(45, 212, 191, 0.18), transparent 70%);
+      filter: blur(2px);
+      animation: driftGlow 14s ease-in-out infinite alternate;
+    }
+
+    .eyebrow {
+      color: var(--warm);
+    }
+
+    .hero-copy,
+    .strategy-summary,
+    .detail-title .meta,
+    .sidebar-head span,
+    .field label,
+    .field small,
+    .run-status,
+    .metric-label,
+    .state-reason,
+    .flow-edge-label,
+    .state-compare-reason,
+    .muted {
+      color: var(--muted);
+    }
+
+    .strategy-path {
+      color: var(--warm);
+    }
+
+    code {
+      padding: 2px 7px;
+      border-radius: 999px;
+      background: rgba(45, 212, 191, 0.12);
+      color: var(--accent-strong);
+    }
+
+    .pill {
+      background: rgba(8, 16, 22, 0.72);
+      border-color: rgba(45, 212, 191, 0.18);
+      color: var(--ink);
+    }
+
+    .strategy-card,
+    .detail-block,
+    .result-block,
+    .state-flow-block,
+    .state-compare-card,
+    .metric,
+    .field,
+    .param-timeline-block,
+    .param-timeline-note,
+    .state-node,
+    .table-wrap,
+    .markdown .markdown-table-wrap,
+    .empty-state,
+    .focus-metric,
+    .focus-lead {
+      background: var(--panel-soft);
+      border-color: var(--line);
+    }
+
+    .strategy-card:hover {
+      border-color: rgba(45, 212, 191, 0.34);
+      background: rgba(15, 27, 35, 0.94);
+    }
+
+    .strategy-card.active {
+      background: linear-gradient(135deg, rgba(45, 212, 191, 0.16), rgba(15, 27, 35, 0.96));
+      border-color: rgba(45, 212, 191, 0.42);
+    }
+
+    .block-label,
+    .state-badge {
+      color: var(--accent-strong);
+      background: rgba(45, 212, 191, 0.12);
+    }
+
+    .markdown p {
+      color: var(--ink);
+    }
+
+    .markdown ul {
+      color: var(--muted);
+    }
+
+    input,
+    select,
+    textarea {
+      color: var(--ink);
+      background: rgba(5, 12, 17, 0.88);
+      border-color: var(--line-strong);
+    }
+
+    input::placeholder,
+    textarea::placeholder {
+      color: rgba(147, 169, 178, 0.72);
+    }
+
+    .checkbox-wrap input {
+      accent-color: var(--accent);
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, #169f90, #2dd4bf);
+      color: #041014;
+      box-shadow: 0 10px 24px rgba(45, 212, 191, 0.22);
+    }
+
+    .btn-secondary {
+      background: rgba(10, 18, 24, 0.92);
+      color: var(--ink);
+      border: 1px solid var(--line);
+    }
+
+    .state-flow-summary,
+    .strategy-focus-summary,
+    .param-timeline-summary {
+      background: rgba(45, 212, 191, 0.08);
+      border: 1px solid rgba(45, 212, 191, 0.12);
+      color: var(--ink);
+    }
+
+    .param-timeline-rail {
+      background: rgba(121, 164, 173, 0.24);
+    }
+
+    .param-timeline-window {
+      background: rgba(45, 212, 191, 0.12);
+      border-color: rgba(45, 212, 191, 0.24);
+    }
+
+    .param-timeline-hold {
+      background: linear-gradient(90deg, rgba(246, 184, 95, 0.18), rgba(45, 212, 191, 0.34));
+    }
+
+    .param-timeline-hold::after {
+      border-top-color: rgba(246, 184, 95, 0.92);
+      border-right-color: rgba(246, 184, 95, 0.92);
+    }
+
+    .param-timeline-marker.boundary .param-timeline-dot {
+      background: rgba(8, 16, 22, 0.88);
+      border-color: rgba(154, 242, 221, 0.68);
+      box-shadow: 0 0 0 4px rgba(154, 242, 221, 0.08);
+    }
+
+    .param-timeline-marker.muted .param-timeline-dot {
+      background: rgba(8, 16, 22, 0.62);
+      border-color: rgba(121, 164, 173, 0.34);
+    }
+
+    .state-node.active {
+      border-color: rgba(45, 212, 191, 0.46);
+      background: linear-gradient(135deg, rgba(45, 212, 191, 0.16), rgba(15, 27, 35, 0.96));
+      box-shadow: inset 0 0 0 1px rgba(45, 212, 191, 0.16);
+    }
+
+    .state-node.path-active:not(.active) {
+      border-color: rgba(45, 212, 191, 0.22);
+      background: linear-gradient(180deg, rgba(45, 212, 191, 0.07), rgba(15, 27, 35, 0.9));
+    }
+
+    .flow-edge-rail::before {
+      background: rgba(121, 164, 173, 0.24);
+    }
+
+    .flow-edge-rail::after {
+      border-top-color: rgba(121, 164, 173, 0.24);
+      border-right-color: rgba(121, 164, 173, 0.24);
+    }
+
+    .flow-edge.active .flow-edge-rail::before {
+      background: linear-gradient(90deg, rgba(45, 212, 191, 0.45), rgba(45, 212, 191, 0.95));
+    }
+
+    .flow-edge.active .flow-edge-rail::after {
+      border-top-color: rgba(45, 212, 191, 0.95);
+      border-right-color: rgba(45, 212, 191, 0.95);
+    }
+
+    table {
+      color: var(--ink);
+    }
+
+    th,
+    td {
+      border-bottom-color: rgba(121, 164, 173, 0.14);
+    }
+
+    td {
+      white-space: normal;
+    }
+
+    thead th {
+      background: var(--table-head);
+    }
+
+    pre {
+      background: var(--code-bg);
+      color: var(--code-ink);
+      border: 1px solid rgba(45, 212, 191, 0.14);
+    }
+
+    .strategy-focus-block {
+      margin-bottom: 18px;
+    }
+
+    .strategy-focus-summary {
+      margin: 10px 0 16px;
+      padding: 14px 16px;
+      border-radius: 18px;
+      line-height: 1.72;
+      font-size: 14px;
+    }
+
+    .strategy-focus-grid,
+    .focus-lead-kv {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .focus-metric,
+    .focus-lead {
+      padding: 16px;
+      border-radius: 18px;
+      border: 1px solid var(--line);
+    }
+
+    .focus-metric-label,
+    .focus-chip-label {
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 8px;
+    }
+
+    .focus-metric-value,
+    .focus-chip-value {
+      font-size: 24px;
+      font-weight: 700;
+      line-height: 1.05;
+      margin-bottom: 8px;
+    }
+
+    .focus-metric-detail {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.6;
+    }
+
+    .focus-lead {
+      margin-top: 16px;
+      background: linear-gradient(180deg, rgba(15, 27, 35, 0.96), rgba(8, 14, 20, 0.86));
+    }
+
+    .focus-lead-head {
+      margin-bottom: 14px;
+    }
+
+    .focus-lead-head h3 {
+      margin: 0 0 6px;
+    }
+
+    .focus-chip {
+      padding: 12px 14px;
+      border-radius: 16px;
+      border: 1px solid rgba(121, 164, 173, 0.14);
+      background: rgba(7, 13, 19, 0.76);
+    }
+
+    @keyframes driftGlow {
+      0% {
+        transform: translate3d(0, 0, 0) scale(1);
+        opacity: 0.85;
+      }
+      100% {
+        transform: translate3d(-10px, 12px, 0) scale(1.08);
+        opacity: 1;
+      }
+    }
+
+    @media (max-width: 1220px) {
+      .strategy-focus-grid,
+      .focus-lead-kv {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+
+    @media (max-width: 760px) {
+      .strategy-focus-grid,
+      .focus-lead-kv {
+        grid-template-columns: 1fr;
+      }
     }
   </style>
 </head>
@@ -750,6 +1327,27 @@ APP_HTML = """<!doctype html>
             </div>
             <form id="strategy-form">
               <div class="form-grid" id="param-form-grid"></div>
+              <section id="parameter-timeline-panel" class="param-timeline-block" hidden>
+                <div class="detail-title">
+                  <div>
+                    <div class="block-label">Timeline</div>
+                    <h3>参数时间线</h3>
+                  </div>
+                  <div class="meta" id="parameter-timeline-meta"></div>
+                </div>
+                <div class="param-timeline-summary" id="parameter-timeline-summary"></div>
+                <div class="param-timeline-lanes">
+                  <div class="param-timeline-lane">
+                    <div class="param-timeline-label">前瞻回测窗口</div>
+                    <div class="param-timeline-track" id="parameter-window-track"></div>
+                  </div>
+                  <div class="param-timeline-lane">
+                    <div class="param-timeline-label">单次信号持有</div>
+                    <div class="param-timeline-track" id="parameter-hold-track"></div>
+                  </div>
+                </div>
+                <div class="param-timeline-notes" id="parameter-timeline-notes"></div>
+              </section>
               <div class="actions">
                 <button type="submit" class="btn-primary" id="apply-btn">应用</button>
                 <button type="button" class="btn-secondary" id="reset-btn">恢复默认</button>
@@ -772,6 +1370,23 @@ APP_HTML = """<!doctype html>
                   <div class="meta">看当前状态为什么压过其余两套持有/退出逻辑</div>
                 </div>
                 <div class="state-compare-grid" id="state-flow-compare"></div>
+              </section>
+            </section>
+            <section id="strategy-focus-panel" class="result-block strategy-focus-block" hidden>
+              <div class="detail-title">
+                <div>
+                  <h3 id="strategy-focus-title">策略画像</h3>
+                  <div class="meta" id="strategy-focus-meta"></div>
+                </div>
+              </div>
+              <div class="strategy-focus-summary" id="strategy-focus-summary"></div>
+              <div class="strategy-focus-grid" id="strategy-focus-grid"></div>
+              <section id="strategy-focus-lead" class="focus-lead" hidden>
+                <div class="focus-lead-head">
+                  <h3 id="focus-lead-title"></h3>
+                  <div class="meta" id="focus-lead-meta"></div>
+                </div>
+                <div class="focus-lead-kv" id="focus-lead-kv"></div>
               </section>
             </section>
             <div class="summary-grid" id="result-metrics"></div>
@@ -825,12 +1440,21 @@ APP_HTML = """<!doctype html>
 
     function fmt(value) {
       if (value === null || value === undefined || value === '') return '-';
+      if (typeof value === 'boolean') return value ? '是' : '否';
       if (typeof value === 'number') {
         if (!Number.isFinite(value)) return '-';
         if (Math.abs(value) >= 1000) return value.toLocaleString('zh-CN', { maximumFractionDigits: 2 });
         return value.toLocaleString('zh-CN', { maximumFractionDigits: 4 });
       }
       return String(value);
+    }
+
+    function currentStrategyId() {
+      return (state.current && (state.current.base_id || state.current.id)) || '';
+    }
+
+    function isEntropyStrategy(strategyId = currentStrategyId()) {
+      return String(strategyId).includes('entropy_bifurcation_setup');
     }
 
     function renderBlocks(hostId, blocks) {
@@ -1009,16 +1633,311 @@ APP_HTML = """<!doctype html>
       });
     }
 
+    function hasParameterTimeline(detail) {
+      if (!detail) return false;
+      const strategyId = (detail.base_id || detail.id || '');
+      if (!isEntropyStrategy(strategyId)) return false;
+      const dests = new Set((detail.parameters || []).map((param) => param.dest));
+      return dests.has('scan_date') && dests.has('hold_days');
+    }
+
+    function normalizeCompactDate(value) {
+      const text = String(value == null ? '' : value).trim();
+      if (!text) return '';
+      const digits = text.replace(/-/g, '');
+      return /^\\d{8}$/.test(digits) ? digits : '';
+    }
+
+    function parseCompactDate(value) {
+      const digits = normalizeCompactDate(value);
+      if (!digits) return null;
+      const year = Number.parseInt(digits.slice(0, 4), 10);
+      const month = Number.parseInt(digits.slice(4, 6), 10);
+      const day = Number.parseInt(digits.slice(6, 8), 10);
+      const date = new Date(Date.UTC(year, month - 1, day));
+      if (
+        Number.isNaN(date.getTime())
+        || date.getUTCFullYear() !== year
+        || date.getUTCMonth() !== month - 1
+        || date.getUTCDate() !== day
+      ) {
+        return null;
+      }
+      return { digits, date };
+    }
+
+    function formatCompactDate(value) {
+      const digits = typeof value === 'string' ? normalizeCompactDate(value) : ((value && value.digits) || '');
+      if (!digits) return '-';
+      return `${digits.slice(0, 4)}-${digits.slice(4, 6)}-${digits.slice(6, 8)}`;
+    }
+
+    function normalizeHoldDays(value) {
+      const parsed = Number.parseInt(String(value == null ? '' : value).trim(), 10);
+      if (!Number.isFinite(parsed) || parsed <= 0) return 5;
+      return parsed;
+    }
+
+    function timelineMarkerPosition(percent) {
+      const bounded = Math.max(5, Math.min(95, Number(percent) || 50));
+      return Number(bounded.toFixed(2));
+    }
+
+    function timelinePositionWithinWindow(startDate, endDate, targetDate) {
+      if (!startDate || !endDate || !targetDate) return 50;
+      const start = startDate.getTime();
+      const end = endDate.getTime();
+      const target = targetDate.getTime();
+      if (end <= start) return 50;
+      const ratio = (target - start) / (end - start);
+      return 14 + Math.max(-0.12, Math.min(1.12, ratio)) * 72;
+    }
+
+    function timelineHoldWidth(holdDays) {
+      return Math.max(26, Math.min(56, 18 + holdDays * 4));
+    }
+
+    function createTimelineMarker(percent, label, value, tone = '') {
+      const marker = document.createElement('div');
+      marker.className = `param-timeline-marker ${tone}`.trim();
+      marker.style.left = `${timelineMarkerPosition(percent)}%`;
+
+      const dot = document.createElement('span');
+      dot.className = 'param-timeline-dot';
+      marker.appendChild(dot);
+
+      const labelNode = document.createElement('div');
+      labelNode.className = 'param-timeline-marker-label';
+      labelNode.textContent = label;
+      marker.appendChild(labelNode);
+
+      const valueNode = document.createElement('div');
+      valueNode.className = 'param-timeline-marker-value';
+      valueNode.textContent = value;
+      marker.appendChild(valueNode);
+
+      return marker;
+    }
+
+    function createTimelineTrackNote(text, tone = '') {
+      const note = document.createElement('div');
+      note.className = `param-timeline-track-note ${tone}`.trim();
+      note.textContent = text;
+      return note;
+    }
+
+    function buildParameterTimelineSummary(values) {
+      const scan = parseCompactDate(values.scan_date);
+      const backtestStart = parseCompactDate(values.backtest_start_date);
+      const backtestEnd = parseCompactDate(values.backtest_end_date);
+      const holdDays = normalizeHoldDays(values.hold_days);
+
+      if (!scan && !backtestStart && !backtestEnd) {
+        return '当前还没有形成完整时间定义。scan_date 决定主扫描日，回测窗口由 backtest_start_date 和 backtest_end_date 共同给出，hold_days 决定每个信号的基础持有期。';
+      }
+
+      if (backtestStart && backtestEnd && backtestStart.date.getTime() <= backtestEnd.date.getTime()) {
+        const inWindow = scan
+          && scan.date.getTime() >= backtestStart.date.getTime()
+          && scan.date.getTime() <= backtestEnd.date.getTime();
+        return (
+          `scan_date 是当前主扫描日，backtest_start_date 到 backtest_end_date 构成滚动前瞻回测窗口，` +
+          `hold_days 表示每个信号向后持有 ${holdDays} 个交易日。` +
+          (scan
+            ? (inWindow
+              ? ' 当前 scan_date 位于回测窗口内。'
+              : ' 当前 scan_date 可以独立于回测窗口存在，主扫描结果和回测样本不必是同一天。')
+            : ' 当前还没有填写 scan_date。')
+        );
+      }
+
+      if (backtestStart || backtestEnd) {
+        if (backtestStart && backtestEnd && backtestStart.date.getTime() > backtestEnd.date.getTime()) {
+          return '当前回测窗口顺序不合法：backtest_start_date 不能晚于 backtest_end_date；在修正前，前瞻回测不会执行。';
+        }
+        return '当前只设置了一个回测边界；前瞻回测要求 backtest_start_date 和 backtest_end_date 同时存在。';
+      }
+
+      return (
+        `当前只有主扫描日和持有期在生效：scan_date = ${formatCompactDate(scan)}，` +
+        `hold_days = ${holdDays} 个交易日。若要做滚动前瞻回测，还需要同时设置 backtest_start_date 和 backtest_end_date。`
+      );
+    }
+
+    function renderBacktestTimelineLane(host, values) {
+      host.innerHTML = '';
+      const backtestStart = parseCompactDate(values.backtest_start_date);
+      const backtestEnd = parseCompactDate(values.backtest_end_date);
+      const scan = parseCompactDate(values.scan_date);
+
+      const rail = document.createElement('div');
+      rail.className = 'param-timeline-rail';
+      host.appendChild(rail);
+
+      if (backtestStart && backtestEnd && backtestStart.date.getTime() <= backtestEnd.date.getTime()) {
+        const window = document.createElement('div');
+        window.className = 'param-timeline-window';
+        window.style.left = '14%';
+        window.style.width = '72%';
+        host.appendChild(window);
+
+        host.appendChild(createTimelineMarker(14, 'backtest_start_date', formatCompactDate(backtestStart), 'boundary'));
+        host.appendChild(createTimelineMarker(86, 'backtest_end_date', formatCompactDate(backtestEnd), 'boundary'));
+        if (scan) {
+          host.appendChild(
+            createTimelineMarker(
+              timelinePositionWithinWindow(backtestStart.date, backtestEnd.date, scan.date),
+              'scan_date',
+              formatCompactDate(scan),
+              'scan'
+            )
+          );
+        }
+        host.appendChild(createTimelineTrackNote('这段区间里的每个历史扫描日，都会各自进入一次前瞻回测。'));
+        return;
+      }
+
+      if (backtestStart) {
+        host.appendChild(createTimelineMarker(22, 'backtest_start_date', formatCompactDate(backtestStart), 'boundary'));
+      }
+      if (backtestEnd) {
+        host.appendChild(createTimelineMarker(78, 'backtest_end_date', formatCompactDate(backtestEnd), 'boundary'));
+      }
+      if (!backtestStart && !backtestEnd && scan) {
+        host.appendChild(createTimelineMarker(50, 'scan_date', formatCompactDate(scan), 'scan muted'));
+      }
+      const warning = backtestStart && backtestEnd && backtestStart.date.getTime() > backtestEnd.date.getTime();
+      host.appendChild(
+        createTimelineTrackNote(
+          warning
+            ? '起止顺序有误：backtest_start_date 不能晚于 backtest_end_date。'
+            : '只有同时设置 backtest_start_date 和 backtest_end_date，前瞻回测窗口才会生效。',
+          warning ? 'warning' : ''
+        )
+      );
+    }
+
+    function renderHoldTimelineLane(host, values) {
+      host.innerHTML = '';
+      const scan = parseCompactDate(values.scan_date);
+      const holdDays = normalizeHoldDays(values.hold_days);
+      const startPct = 22;
+      const width = timelineHoldWidth(holdDays);
+      const endPct = Math.min(86, startPct + width);
+
+      const rail = document.createElement('div');
+      rail.className = 'param-timeline-rail';
+      host.appendChild(rail);
+
+      host.appendChild(createTimelineMarker(startPct, 'scan_date', formatCompactDate(scan), scan ? 'scan' : 'scan muted'));
+
+      const holdBar = document.createElement('div');
+      holdBar.className = 'param-timeline-hold';
+      holdBar.style.left = `${timelineMarkerPosition(startPct)}%`;
+      holdBar.style.width = `${Math.max(12, endPct - startPct).toFixed(2)}%`;
+      host.appendChild(holdBar);
+
+      host.appendChild(createTimelineMarker(endPct, 'hold_days', `${holdDays} 个交易日`, 'hold'));
+      host.appendChild(createTimelineTrackNote(`每个扫描信号都会从自己的 scan_date 起，向后持有 ${holdDays} 个交易日。`));
+    }
+
+    function renderParameterTimelineNotes(host, values) {
+      host.innerHTML = '';
+      const scan = parseCompactDate(values.scan_date);
+      const backtestStart = parseCompactDate(values.backtest_start_date);
+      const backtestEnd = parseCompactDate(values.backtest_end_date);
+      const holdDays = normalizeHoldDays(values.hold_days);
+
+      const notes = [
+        {
+          label: 'scan_date',
+          value: formatCompactDate(scan),
+          detail: '当前页面的主扫描输出、候选池和入选结果按这一天生成。',
+        },
+        {
+          label: 'backtest window',
+          value: backtestStart && backtestEnd ? `${formatCompactDate(backtestStart)} -> ${formatCompactDate(backtestEnd)}` : '-',
+          detail: backtestStart && backtestEnd
+            ? '这段区间里的可用扫描日会滚动进入前瞻回测。'
+            : '只填一端不会执行前瞻回测。',
+        },
+        {
+          label: 'hold_days',
+          value: `${holdDays} 个交易日`,
+          detail: `回测窗口内的每个信号，都会各自向后持有 ${holdDays} 个交易日。`,
+        },
+      ];
+
+      notes.forEach((item) => {
+        const card = document.createElement('article');
+        card.className = 'param-timeline-note';
+
+        const label = document.createElement('div');
+        label.className = 'param-timeline-note-label';
+        label.textContent = item.label;
+        card.appendChild(label);
+
+        const value = document.createElement('div');
+        value.className = 'param-timeline-note-value';
+        value.textContent = item.value;
+        card.appendChild(value);
+
+        const detail = document.createElement('div');
+        detail.className = 'param-timeline-note-detail';
+        detail.textContent = item.detail;
+        card.appendChild(detail);
+
+        host.appendChild(card);
+      });
+    }
+
+    function renderParameterTimeline(detail) {
+      const panel = document.getElementById('parameter-timeline-panel');
+      const meta = document.getElementById('parameter-timeline-meta');
+      const summary = document.getElementById('parameter-timeline-summary');
+      const windowTrack = document.getElementById('parameter-window-track');
+      const holdTrack = document.getElementById('parameter-hold-track');
+      const notes = document.getElementById('parameter-timeline-notes');
+
+      if (!hasParameterTimeline(detail)) {
+        panel.hidden = true;
+        meta.textContent = '';
+        summary.textContent = '';
+        windowTrack.innerHTML = '';
+        holdTrack.innerHTML = '';
+        notes.innerHTML = '';
+        return;
+      }
+
+      const values = collectFormValues(detail);
+      panel.hidden = false;
+      meta.textContent = '按当前表单实时刷新';
+      summary.textContent = buildParameterTimelineSummary(values);
+      renderBacktestTimelineLane(windowTrack, values);
+      renderHoldTimelineLane(holdTrack, values);
+      renderParameterTimelineNotes(notes, values);
+    }
+
     function renderMetrics(result) {
       const host = document.getElementById('result-metrics');
       const summary = result.summary || {};
       const backtest = result.backtest_summary || {};
+      const strategyId = currentStrategyId();
       const metrics = result.state_flow
         ? [
             ['买点日期', summary.start_date || '-'],
             ['扫描日期', result.scan_date || '-'],
             ['当前状态', summary.current_state_label || '-'],
             ['区间收益', summary.holding_return_pct === null || summary.holding_return_pct === undefined ? '-' : `${(Number(summary.holding_return_pct) * 100).toFixed(1)}%`],
+          ]
+        : isEntropyStrategy(strategyId)
+        ? [
+            ['扫描日期', result.scan_date || '-'],
+            ['市场相位', (result.strategy_focus && result.strategy_focus.phase_label) || summary.market_phase_state || '-'],
+            ['候选数', summary.n_candidates ?? result.candidate_count ?? 0],
+            ['入选数', summary.n_selected ?? result.selected_count ?? 0],
+            ['放弃数', summary.n_abandoned ?? 0],
+            ['最终净值', backtest.final_nav ?? '-'],
           ]
         : [
             ['扫描日期', result.scan_date || '-'],
@@ -1103,6 +2022,72 @@ APP_HTML = """<!doctype html>
       });
     }
 
+    function renderStrategyFocus(result) {
+      const panel = document.getElementById('strategy-focus-panel');
+      const title = document.getElementById('strategy-focus-title');
+      const meta = document.getElementById('strategy-focus-meta');
+      const summaryHost = document.getElementById('strategy-focus-summary');
+      const gridHost = document.getElementById('strategy-focus-grid');
+      const leadPanel = document.getElementById('strategy-focus-lead');
+      const leadTitle = document.getElementById('focus-lead-title');
+      const leadMeta = document.getElementById('focus-lead-meta');
+      const leadKv = document.getElementById('focus-lead-kv');
+      const focus = result.strategy_focus;
+
+      if (!focus || !focus.cards || !focus.cards.length) {
+        panel.hidden = true;
+        title.textContent = '策略画像';
+        meta.textContent = '';
+        summaryHost.textContent = '';
+        gridHost.innerHTML = '';
+        leadPanel.hidden = true;
+        leadTitle.textContent = '';
+        leadMeta.textContent = '';
+        leadKv.innerHTML = '';
+        return;
+      }
+
+      panel.hidden = false;
+      title.textContent = focus.title || '策略画像';
+      meta.textContent = focus.subtitle || '';
+      summaryHost.textContent = focus.summary || '';
+      gridHost.innerHTML = '';
+
+      (focus.cards || []).forEach((card) => {
+        const node = document.createElement('article');
+        node.className = 'focus-metric';
+        node.innerHTML = `
+          <div class="focus-metric-label">${card.label || '-'}</div>
+          <div class="focus-metric-value">${fmt(card.value)}</div>
+          <div class="focus-metric-detail">${card.detail || ''}</div>
+        `;
+        gridHost.appendChild(node);
+      });
+
+      const lead = focus.lead;
+      if (!lead) {
+        leadPanel.hidden = true;
+        leadTitle.textContent = '';
+        leadMeta.textContent = '';
+        leadKv.innerHTML = '';
+        return;
+      }
+
+      leadPanel.hidden = false;
+      leadTitle.textContent = lead.title || '';
+      leadMeta.textContent = lead.subtitle || '';
+      leadKv.innerHTML = '';
+      (lead.items || []).forEach((item) => {
+        const node = document.createElement('div');
+        node.className = 'focus-chip';
+        node.innerHTML = `
+          <div class="focus-chip-label">${item.label || '-'}</div>
+          <div class="focus-chip-value">${fmt(item.value)}</div>
+        `;
+        leadKv.appendChild(node);
+      });
+    }
+
     function renderTable(headId, bodyId, rows, columns) {
       const thead = document.getElementById(headId);
       const tbody = document.getElementById(bodyId);
@@ -1132,14 +2117,14 @@ APP_HTML = """<!doctype html>
     function renderApplyResult(result) {
       document.getElementById('results-panel').hidden = false;
       renderStateFlow(result);
+      renderStrategyFocus(result);
       renderMetrics(result);
       const selectedRows = result.selected_rows || [];
       const candidateRows = result.candidate_rows || [];
-      const summarySelectedColumns = ['股票名称', '股票代码', '选中原因', '操作建议'];
-      const strategyId = (state.current && (state.current.base_id || state.current.id)) || '';
-      const preferredSelectedColumns = strategyId.includes('entropy_bifurcation_setup')
-        ? ['selected_rank', 'symbol', 'name', 'industry', 'market', 'strategy_score', 'entropy_quality', 'bifurcation_quality', 'trigger_quality', 'breakout_10', 'amount', 'turnover_rate']
-        : ['selected_rank', 'symbol', 'name', 'industry', 'market', 'strategy_score', 'resonance_score', 'support_count', 'energy_term', 'amount', 'turnover_rate'];
+      const strategyId = currentStrategyId();
+      const summarySelectedColumns = isEntropyStrategy(strategyId)
+        ? ['股票名称', '股票代码', '建仓方式', '计划仓位', '退出模式', '执行状态', '选中原因', '操作建议']
+        : ['股票名称', '股票代码', '选中原因', '操作建议'];
       const preferredCandidateColumns = strategyId.includes('uptrend_hold_state_flow')
         ? ['state_label', 'active', 'activated_on_path', 'first_entry_date', 'last_entry_date', 'days_in_state', 'state_score', 'reason', 'entropy_reserve', 'disorder_pressure', 'expansion_thrust', 'directional_persistence', 'peak_extension_score', 'deceleration_score', 'fragility_score']
         : strategyId.includes('rapid_expansion_exhaustion_exit')
@@ -1148,8 +2133,8 @@ APP_HTML = """<!doctype html>
         ? ['symbol', 'name', 'start_date', 'scan_date', 'judgement', 'strategy_state', 'strategy_score', 'expansion_thrust', 'acceptance_score', 'instability_risk', 'holding_return_pct']
         : strategyId.includes('entropy_hold_judgement')
         ? ['symbol', 'name', 'start_date', 'scan_date', 'judgement', 'strategy_state', 'strategy_score', 'disorder_pressure', 'first_exit_date', 'holding_return_pct']
-        : strategyId.includes('entropy_bifurcation_setup')
-        ? ['symbol', 'name', 'industry', 'market', 'strategy_score', 'entropy_quality', 'bifurcation_quality', 'trigger_quality', 'breakout_10', 'amount', 'turnover_rate']
+        : isEntropyStrategy(strategyId)
+        ? ['symbol', 'name', 'industry', 'market', 'market_phase_state', 'strategy_state', 'context_score', 'stock_state_score', 'strategy_score', 'entropy_quality', 'bifurcation_quality', 'trigger_quality', 'execution_readiness_score', 'execution_penalty_score', 'abandonment_score', 'entry_mode', 'position_scale']
         : ['symbol', 'name', 'industry', 'market', 'strategy_score', 'resonance_score', 'support_count', 'energy_term', 'amount', 'turnover_rate'];
       const selectedColumns = (selectedRows[0] ? summarySelectedColumns.filter((column) => column in selectedRows[0]) : []);
       const candidateColumns = (candidateRows[0] ? preferredCandidateColumns.filter((column) => column in candidateRows[0]) : []);
@@ -1185,12 +2170,22 @@ APP_HTML = """<!doctype html>
       renderBlocks('detail-description', detail.readme.description_blocks || []);
       renderBlocks('detail-params-doc', detail.readme.parameter_blocks || []);
       renderParamForm(detail);
+      renderParameterTimeline(detail);
       document.getElementById('results-panel').hidden = true;
       document.getElementById('state-flow-panel').hidden = true;
       document.getElementById('state-flow-summary').textContent = '';
       document.getElementById('state-flow-diagram').innerHTML = '';
       document.getElementById('state-compare-block').hidden = true;
       document.getElementById('state-flow-compare').innerHTML = '';
+      document.getElementById('strategy-focus-panel').hidden = true;
+      document.getElementById('strategy-focus-title').textContent = '策略画像';
+      document.getElementById('strategy-focus-meta').textContent = '';
+      document.getElementById('strategy-focus-summary').textContent = '';
+      document.getElementById('strategy-focus-grid').innerHTML = '';
+      document.getElementById('strategy-focus-lead').hidden = true;
+      document.getElementById('focus-lead-title').textContent = '';
+      document.getElementById('focus-lead-meta').textContent = '';
+      document.getElementById('focus-lead-kv').innerHTML = '';
       document.getElementById('run-status').textContent = 'Ready';
     }
 
@@ -1223,8 +2218,16 @@ APP_HTML = """<!doctype html>
 
     function bindEvents() {
       document.getElementById('strategy-form').addEventListener('submit', applyStrategy);
+      const rerenderTimeline = () => {
+        if (state.current) renderParameterTimeline(state.current);
+      };
+      document.getElementById('param-form-grid').addEventListener('input', rerenderTimeline);
+      document.getElementById('param-form-grid').addEventListener('change', rerenderTimeline);
       document.getElementById('reset-btn').addEventListener('click', () => {
-        if (state.current) resetForm(state.current);
+        if (state.current) {
+          resetForm(state.current);
+          renderParameterTimeline(state.current);
+        }
       });
     }
 
@@ -1705,6 +2708,54 @@ def _strategy_variant(strategy: dict[str, Any]) -> str:
   return str(fixed_values.get("strategy_name") or strategy.get("base_id") or strategy.get("id") or "")
 
 
+def _text_or_dash(value: Any) -> str:
+  if value is None:
+    return "-"
+  try:
+    if pd.isna(value):
+      return "-"
+  except TypeError:
+    pass
+  text = str(value).strip()
+  if not text or text.lower() == "nan":
+    return "-"
+  return text
+
+
+def _lookup_label(labels: dict[str, str], value: Any) -> str:
+  text = _text_or_dash(value)
+  if text == "-":
+    return text
+  return labels.get(text, text)
+
+
+def _phase_label(value: Any) -> str:
+  return _lookup_label(MARKET_PHASE_LABELS, value)
+
+
+def _entry_mode_label(value: Any) -> str:
+  return _lookup_label(ENTRY_MODE_LABELS, value)
+
+
+def _exit_mode_label(value: Any) -> str:
+  return _lookup_label(EXIT_MODE_LABELS, value)
+
+
+def _execution_state_label(value: Any) -> str:
+  return _lookup_label(EXECUTION_STATE_LABELS, value)
+
+
+def _yes_no_label(value: Any) -> str:
+  return "是" if bool(value) else "否"
+
+
+def _int_or_zero(value: Any) -> int:
+  number = _float_or_none(value)
+  if number is None:
+    return 0
+  return int(number)
+
+
 STATE_FLOW_ORDER = [
   "observation",
   "entropy_hold_judgement",
@@ -1858,7 +2909,8 @@ def _selected_reason_text(row: dict[str, Any], strategy: dict[str, Any]) -> str:
     )
   if variant == "entropy_bifurcation_setup":
     return (
-      f"当前处于低熵压缩后启动区，熵质量 {_fmt_num(row.get('entropy_quality'))}，"
+      f"当前市场处于 {_phase_label(row.get('market_phase_state'))}，个股位于低熵压缩后启动区，"
+      f"上下文分数 {_fmt_num(row.get('context_score'))}，熵质量 {_fmt_num(row.get('entropy_quality'))}，"
       f"分叉质量 {_fmt_num(row.get('bifurcation_quality'))}，触发质量 {_fmt_num(row.get('trigger_quality'))}。"
     )
   if variant == "entropy_hold_judgement":
@@ -1920,7 +2972,11 @@ def _selected_advice_text(row: dict[str, Any], strategy: dict[str, Any], values:
   variant = _strategy_variant(strategy)
   base = f"建议以 {hold_days_int} 个交易日作为基础持有周期。"
   if variant == "entropy_bifurcation_setup":
-    return base + " 若突破动能回落，或重新跌回 20 日线下方，可提前止盈/止损。"
+    entry_mode = _entry_mode_label(row.get("entry_mode"))
+    position_scale = _fmt_pct(row.get("position_scale"))
+    staged_entry_days = _text_or_dash(row.get("staged_entry_days"))
+    staged_text = f"，预计分 {staged_entry_days} 天完成建仓" if staged_entry_days != "-" and str(row.get("entry_mode") or "") == "staged" else ""
+    return base + f" 当前建议 {entry_mode}，计划仓位 {position_scale}{staged_text}；若突破动能回落，或重新跌回 20 日线下方，可提前止盈/止损。"
   if variant == "entropy_hold_judgement":
     if bool(row.get("strategy_state")):
       return base + " 当前可继续持有；只有当高熵乱序连续积累且动力记忆持续坍缩时，再考虑退出。"
@@ -1954,11 +3010,101 @@ def _selected_display_rows(selected_rows: list[dict[str, Any]], strategy: dict[s
       {
         "股票名称": row.get("name") or row.get("ts_code") or row.get("symbol") or "-",
         "股票代码": row.get("symbol") or row.get("ts_code") or "-",
+        "建仓方式": _entry_mode_label(row.get("entry_mode")),
+        "计划仓位": _fmt_pct(row.get("position_scale")),
+        "退出模式": _exit_mode_label(row.get("exit_mode")),
+        "执行状态": _execution_state_label(row.get("execution_cost_state")),
         "选中原因": _selected_reason_text(row, strategy),
         "操作建议": _selected_advice_text(row, strategy, values),
       }
     )
   return display_rows
+
+
+def _entropy_bifurcation_focus_payload(
+  summary: dict[str, Any],
+  selected_rows: list[dict[str, Any]],
+  candidate_rows: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+  if not summary and not selected_rows and not candidate_rows:
+    return None
+
+  lead_row = dict(selected_rows[0]) if selected_rows else (dict(candidate_rows[0]) if candidate_rows else {})
+  market_phase_label = _phase_label(summary.get("market_phase_state") or lead_row.get("market_phase_state"))
+  candidate_count = _int_or_zero(summary.get("n_candidates")) or len(candidate_rows)
+  selected_count = _int_or_zero(summary.get("n_selected")) or len(selected_rows)
+  abandoned_count = _int_or_zero(summary.get("n_abandoned"))
+
+  lead_name = _text_or_dash(lead_row.get("name") or lead_row.get("symbol"))
+  if lead_name != "-":
+    lead_message = (
+      f"首选标的 {lead_name} 当前建议 {_entry_mode_label(lead_row.get('entry_mode'))}，"
+      f"计划仓位 {_fmt_pct(lead_row.get('position_scale'))}，退出模式 {_exit_mode_label(lead_row.get('exit_mode'))}。"
+    )
+  else:
+    lead_message = "当前没有形成最终入选，更接近观测盘而不是执行盘。"
+
+  subtitle_parts = [
+    _text_or_dash(lead_row.get("industry")),
+    _text_or_dash(lead_row.get("market")),
+    market_phase_label,
+  ]
+  subtitle = " / ".join(part for part in subtitle_parts if part != "-")
+
+  lead_payload = None
+  if lead_row:
+    lead_title = lead_name
+    lead_symbol = _text_or_dash(lead_row.get("symbol"))
+    if lead_symbol != "-" and lead_symbol != lead_title:
+      lead_title = f"{lead_title} ({lead_symbol})"
+    lead_payload = {
+      "title": lead_title,
+      "subtitle": subtitle,
+      "items": [
+        {"label": "建仓方式", "value": _entry_mode_label(lead_row.get("entry_mode"))},
+        {"label": "计划仓位", "value": _fmt_pct(lead_row.get("position_scale"))},
+        {"label": "分段天数", "value": _text_or_dash(lead_row.get("staged_entry_days"))},
+        {"label": "退出模式", "value": _exit_mode_label(lead_row.get("exit_mode"))},
+        {"label": "执行状态", "value": _execution_state_label(lead_row.get("execution_cost_state"))},
+        {"label": "状态门控", "value": "通过" if bool(lead_row.get("strategy_state")) else "观察"},
+        {"label": "潜在标签", "value": _text_or_dash(lead_row.get("latent_state_label"))},
+        {"label": "上下文分数", "value": _fmt_num(lead_row.get("context_score"))},
+        {"label": "执行惩罚", "value": _fmt_num(lead_row.get("execution_penalty_score"))},
+        {"label": "放弃交易", "value": _yes_no_label(lead_row.get("strategic_abandonment"))},
+      ],
+    }
+
+  return {
+    "strategy": "entropy_bifurcation_setup",
+    "title": "熵分叉策略画像",
+    "subtitle": "市场门控 + 个股状态 + 执行计划",
+    "phase_label": market_phase_label,
+    "summary": (
+      f"当前市场处于 {market_phase_label}，门控分数 {_fmt_num(summary.get('market_regime_score'))}，"
+      f"耦合熵 {_fmt_num(summary.get('market_coupling_entropy_20'))}，噪声成本 {_fmt_num(summary.get('market_noise_cost'))}。"
+      f"本次共 {candidate_count} 只候选，最终 {selected_count} 只入选，显式放弃 {abandoned_count} 只。{lead_message}"
+    ),
+    "cards": [
+      {"label": "市场相位", "value": market_phase_label, "detail": f"门控分数 {_fmt_num(summary.get('market_regime_score'))}"},
+      {"label": "耦合熵", "value": _fmt_num(summary.get('market_coupling_entropy_20')), "detail": f"相位失真占比 {_fmt_pct(summary.get('market_phase_distortion_share'))}"},
+      {"label": "噪声成本", "value": _fmt_num(summary.get('market_noise_cost')), "detail": f"显式放弃 {abandoned_count} 只"},
+      {"label": "上下文强度", "value": _fmt_num(summary.get('avg_context_score')), "detail": f"平均个股状态 {_fmt_num(summary.get('avg_stock_state_score'))}"},
+      {"label": "执行准备", "value": _fmt_num(summary.get('avg_execution_readiness_score')), "detail": f"执行惩罚 {_fmt_num(summary.get('avg_execution_penalty_score'))}"},
+      {"label": "实验层观测", "value": _fmt_num(summary.get('avg_experimental_model_score')), "detail": f"平均放弃强度 {_fmt_num(summary.get('avg_abandonment_score'))}"},
+    ],
+    "lead": lead_payload,
+  }
+
+
+def _strategy_focus_payload(
+  strategy: dict[str, Any],
+  summary: dict[str, Any],
+  selected_rows: list[dict[str, Any]],
+  candidate_rows: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+  if strategy.get("base_id") == "entropy_bifurcation_setup":
+    return _entropy_bifurcation_focus_payload(summary, selected_rows, candidate_rows)
+  return None
 
 
 def _run_strategy(strategy: dict[str, Any], values: dict[str, Any]) -> dict[str, Any]:
@@ -1992,6 +3138,7 @@ def _run_strategy(strategy: dict[str, Any], values: dict[str, Any]) -> dict[str,
         "selected_rows": selected_rows,
         "candidate_rows": candidate_rows,
         "state_flow": _state_flow_payload(summary_rows[0], candidate_rows) if strategy.get("base_id") == "uptrend_hold_state_flow" and summary_rows else None,
+      "strategy_focus": _strategy_focus_payload(strategy, summary_rows[0] if summary_rows else {}, raw_selected_rows, candidate_rows),
         "selected_count": len(selected_rows),
         "candidate_count": len(candidate_rows),
         "command_display": command_display,

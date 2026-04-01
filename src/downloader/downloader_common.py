@@ -9,13 +9,26 @@ from datetime import datetime, timedelta
 import pandas as pd
 import requests
 
-from daily_kline_provider import fetch_daily_kline_lines
-from eastmoney_universe import fetch_float_shares_eastmoney
+try:
+    from daily_kline_provider import fetch_daily_kline_lines
+except Exception:
+    fetch_daily_kline_lines = None
+
+try:
+    from eastmoney_universe import fetch_float_shares_eastmoney
+except Exception:
+    fetch_float_shares_eastmoney = None
+
+try:
+    from tushare_provider import fetch_ts_float_share_map
+except Exception:
+    fetch_ts_float_share_map = None
 
 
 _FAIL_LOCK = threading.Lock()
 _FLOAT_SHARES_LOCK = threading.Lock()
 _FLOAT_SHARES_CACHE: dict[str, float | None] = {}
+_FLOAT_SHARES_BY_DATE_CACHE: dict[str, dict[str, float]] = {}
 _PROXY_ABORT_LOCK = threading.Lock()
 _PROXY_ABORT_EVENT = threading.Event()
 _PROXY_ABORT_MESSAGE = ""
@@ -23,6 +36,7 @@ _PROXY_ABORT_MESSAGE = ""
 _TS_DISABLE_LOCK = threading.Lock()
 _TS_MINUTE_DISABLED = False
 _TS_MINUTE_DISABLED_REASON = ""
+_MISSING_DEP_WARNINGS: set[str] = set()
 
 
 _NO_PROXY = os.getenv("GP_NO_PROXY", "").strip().lower() in {"1", "true", "yes"}
@@ -39,6 +53,14 @@ def _get_http_session() -> requests.Session:
             s.trust_env = False
         _HTTP_LOCAL.session = s
     return s
+
+
+def _warn_missing_dependency(name: str, reason: str) -> None:
+    with _FAIL_LOCK:
+        if name in _MISSING_DEP_WARNINGS:
+            return
+        _MISSING_DEP_WARNINGS.add(name)
+    print(f"[WARN] Optional dependency {name} unavailable: {reason}")
 
 
 _EM_MAX_INFLIGHT = max(1, int(os.getenv("GP_EM_MAX_INFLIGHT", "4") or "4"))
@@ -133,13 +155,53 @@ def _get_float_shares_cached(symbol: str) -> float | None:
             return _FLOAT_SHARES_CACHE[symbol]
 
     try:
-        v = fetch_float_shares_eastmoney(symbol)
+        if fetch_float_shares_eastmoney is None:
+            _warn_missing_dependency("eastmoney_universe", "turnover rate will be left empty")
+            v = None
+        else:
+            v = fetch_float_shares_eastmoney(symbol)
     except Exception:
         v = None
 
     with _FLOAT_SHARES_LOCK:
         _FLOAT_SHARES_CACHE[symbol] = v
     return v
+
+
+def _get_tushare_float_share_map_cached(date_yyyy_mm_dd: str) -> dict[str, float]:
+    trade_date = str(date_yyyy_mm_dd or "").strip().replace("-", "")
+    if not trade_date:
+        return {}
+
+    with _FLOAT_SHARES_LOCK:
+        cached = _FLOAT_SHARES_BY_DATE_CACHE.get(trade_date)
+        if cached is not None:
+            return cached
+
+    mapping: dict[str, float] = {}
+    if _has_tushare_token():
+        try:
+            if fetch_ts_float_share_map is None:
+                _warn_missing_dependency(
+                    "tushare_provider",
+                    "historical minute turnover will fall back to current float shares",
+                )
+            else:
+                mapping = fetch_ts_float_share_map(trade_date)
+        except Exception:
+            mapping = {}
+
+    with _FLOAT_SHARES_LOCK:
+        _FLOAT_SHARES_BY_DATE_CACHE[trade_date] = mapping
+    return mapping
+
+
+def _get_float_shares_for_trade_date(symbol: str, date_yyyy_mm_dd: str) -> float | None:
+    trade_date_map = _get_tushare_float_share_map_cached(date_yyyy_mm_dd)
+    float_shares = trade_date_map.get(symbol)
+    if float_shares is not None and float_shares > 0:
+        return float_shares
+    return _get_float_shares_cached(symbol)
 
 
 def record_failure(symbol: str, date: str, output_dir: str) -> None:
@@ -260,13 +322,23 @@ def minute_source() -> str:
     """
 
     s = (os.getenv("GP_MINUTE_SOURCE", "") or "").strip().lower()
-    if not s or s in {"ts", "tushare"}:
+    if not s or s in {"em", "eastmoney"}:
+        return "em"
+    if s in {"ts", "tushare"}:
         return "ts"
     if s in {"em", "eastmoney"}:
         return "em"
     if s in {"tx", "tencent"}:
         return "tx"
-    return "ts"
+    return "em"
+
+
+def _has_tushare_token() -> bool:
+    token = (os.getenv("TUSHARE_TOKEN", "") or "").strip()
+    if token:
+        return True
+    token = (os.getenv("GP_TUSHARE_TOKEN", "") or "").strip()
+    return bool(token)
 
 
 def _fetch_em_trends2(symbol: str, ndays: int = 5) -> dict:
@@ -292,6 +364,9 @@ def _fetch_em_trends2(symbol: str, ndays: int = 5) -> dict:
 
 def _fetch_em_daily_klines(symbol: str, beg_yyyymmdd: str, end_yyyymmdd: str, fqt: str) -> list[str]:
     # Centralized provider supports em/tx and outputs a canonical schema.
+    if fetch_daily_kline_lines is None:
+        _warn_missing_dependency("daily_kline_provider", "minute qfq/hfq adjustment will fall back to raw prices")
+        return []
     return fetch_daily_kline_lines(symbol, beg_yyyymmdd, end_yyyymmdd, fqt)
 
 
@@ -410,8 +485,8 @@ def fetch_em_1m(symbol: str, date_yyyy_mm_dd: str, fqt: int | str = 1) -> pd.Dat
     df["时间"] = df["时间"].astype(str)
 
     factor = 1.0
-    close_raw_today, _prev_close_raw = _daily_close_and_prev_close(symbol, date_yyyy_mm_dd, "0")
     if fqt_str != "0":
+        close_raw_today, _prev_close_raw = _daily_close_and_prev_close(symbol, date_yyyy_mm_dd, "0")
         close_adj_today, _prev_close_adj = _daily_close_and_prev_close(symbol, date_yyyy_mm_dd, fqt_str)
         if close_raw_today and close_adj_today and close_raw_today > 0:
             factor = float(close_adj_today) / float(close_raw_today)
@@ -518,8 +593,8 @@ def fetch_tx_1m(symbol: str, date_yyyy_mm_dd: str, fqt: int | str = 1) -> pd.Dat
     df["时间"] = df["时间"].astype(str)
 
     factor = 1.0
-    close_raw_today, _prev_close_raw = _daily_close_and_prev_close(symbol, date_yyyy_mm_dd, "0")
     if fqt_str != "0":
+        close_raw_today, _prev_close_raw = _daily_close_and_prev_close(symbol, date_yyyy_mm_dd, "0")
         close_adj_today, _prev_close_adj = _daily_close_and_prev_close(symbol, date_yyyy_mm_dd, fqt_str)
         if close_raw_today and close_adj_today and close_raw_today > 0:
             factor = float(close_adj_today) / float(close_raw_today)
@@ -569,10 +644,14 @@ def fetch_1m(symbol: str, date_yyyy_mm_dd: str, fqt: int | str = 1) -> tuple[pd.
 
     primary = minute_source()
     candidates = ["ts", "tx", "em"]
+    if not _has_tushare_token() and "ts" in candidates:
+        candidates = [x for x in candidates if x != "ts"]
+        if primary == "ts":
+            primary = "em"
     if _tushare_minute_disabled() and "ts" in candidates:
         candidates = [x for x in candidates if x != "ts"]
         if primary == "ts":
-            primary = "tx"
+            primary = "em" if "em" in candidates else candidates[0]
     order = [primary] + [x for x in candidates if x != primary]
 
     first_err: Exception | None = None
@@ -596,7 +675,14 @@ def fetch_1m(symbol: str, date_yyyy_mm_dd: str, fqt: int | str = 1) -> tuple[pd.
     raise first_err
 
 
-def get_daily(tasks: list[dict], working_path: str, output_dir: str, fqt: int | str = 1) -> None:
+def get_daily(
+    tasks: list[dict],
+    working_path: str,
+    output_dir: str,
+    fqt: int | str = 1,
+    force: bool = False,
+    abort_on_proxy: bool = True,
+) -> None:
     colnames = ["时间", "开盘", "收盘", "最高", "最低", "成交量(手)", "成交额(元)", "均价", "换手率(%)"]
 
     trade_root = os.path.join(output_dir, "trade")
@@ -617,7 +703,7 @@ def get_daily(tasks: list[dict], working_path: str, output_dir: str, fqt: int | 
         csv_dir = os.path.join(trade_root, symbol)
         csv_file = f"{csv_dir}/{date_str}.csv"
 
-        if os.path.exists(csv_file):
+        if os.path.exists(csv_file) and not force:
             try:
                 tmp_df = pd.read_csv(csv_file, delimiter=",")
                 if not tmp_df.empty:
@@ -643,7 +729,7 @@ def get_daily(tasks: list[dict], working_path: str, output_dir: str, fqt: int | 
         try:
             minute_df, src = fetch_1m(symbol, date_str, fqt=fqt)
             if not minute_df.empty:
-                float_shares = _get_float_shares_cached(symbol)
+                float_shares = _get_float_shares_for_trade_date(symbol, date_str)
                 if float_shares and float_shares > 0:
                     # turnover(%) = volume_shares / float_shares * 100
                     # volume_shares = volume_hands * 100
@@ -653,7 +739,7 @@ def get_daily(tasks: list[dict], working_path: str, output_dir: str, fqt: int | 
                 else:
                     minute_df["换手率(%)"] = pd.NA
                 total_detail_df = minute_df
-                provider = "Tencent" if src == "tx" else "Eastmoney"
+                provider = "Tushare" if src == "ts" else "Tencent" if src == "tx" else "Eastmoney"
                 print(f"Fetched {len(minute_df)} 1-minute rows from {provider} for {symbol} {date_str}")
             else:
                 print(f"No data found for {symbol} on {date_str}")
@@ -664,14 +750,16 @@ def get_daily(tasks: list[dict], working_path: str, output_dir: str, fqt: int | 
             print(f"Minute fetch failed for {symbol} {date_str}: {type(e).__name__} - {msg}")
             day_success = False
             if _is_proxy_error(e):
-                _set_proxy_abort(f"{type(e).__name__}: {msg}")
-                print("[ABORT] Proxy error detected, stop all remaining tasks immediately.")
                 record_failure(symbol, date_str, output_dir)
-                try:
-                    _thread.interrupt_main()
-                except Exception:
-                    pass
-                break
+                if abort_on_proxy:
+                    _set_proxy_abort(f"{type(e).__name__}: {msg}")
+                    print("[ABORT] Proxy error detected, stop all remaining tasks immediately.")
+                    try:
+                        _thread.interrupt_main()
+                    except Exception:
+                        pass
+                    break
+                print("[WARN] Proxy error detected, record failure and continue this round.")
 
         if day_success:
             if not total_detail_df.empty:
@@ -694,6 +782,8 @@ def run_tasks_in_threads(
     working_path: str,
     output_dir: str,
     fqt: int | str = 1,
+    force: bool = False,
+    abort_on_proxy: bool = True,
 ) -> None:
     _PROXY_ABORT_EVENT.clear()
     _set_proxy_abort_message = False
@@ -711,7 +801,7 @@ def run_tasks_in_threads(
 
     workers: list[threading.Thread] = []
     for i, chunk in enumerate(tasks_cks):
-        t = threading.Thread(target=get_daily, args=(chunk, working_path, output_dir, fqt))
+        t = threading.Thread(target=get_daily, args=(chunk, working_path, output_dir, fqt, force, abort_on_proxy))
         t.name = f"worker_{i}"
         t.daemon = True
         print(t.name)

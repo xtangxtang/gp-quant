@@ -7,4 +7,5 @@ fake-useragent
 lxml
 chinesecalendar
 chinesecalendar
+pypinyin
 tushare

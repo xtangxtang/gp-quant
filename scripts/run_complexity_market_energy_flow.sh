@@ -7,7 +7,7 @@ WORKSPACE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 STRATEGY_NAME="market_energy_flow"
 DEFAULT_DATA_DIR="/nvme5/xtang/gp-workspace/gp-data/tushare-daily-full"
 DEFAULT_BASIC_PATH="/nvme5/xtang/gp-workspace/gp-data/tushare_stock_basic.csv"
-DEFAULT_OUT_DIR="$WORKSPACE_DIR/results/complexity/$STRATEGY_NAME"
+DEFAULT_OUT_DIR="$WORKSPACE_DIR/results/entropy_bifurcation_setup/$STRATEGY_NAME"
 PYTHON_CMD=(
   /root/miniforge3/bin/conda
   run
@@ -37,7 +37,7 @@ show_help() {
   echo "用法: $0 [选项]"
   echo "选项:"
   echo "  --data-dir <dir>         日线 CSV 目录"
-  echo "  --out-dir <dir>          输出目录，默认写到 results/complexity/$STRATEGY_NAME"
+  echo "  --out-dir <dir>          输出目录，默认写到 results/entropy_bifurcation_setup/$STRATEGY_NAME"
   echo "  --scan-date <yyyymmdd>   扫描日期；默认自动推断最新交易日"
   echo "  --basic-path <file>      tushare_stock_basic.csv 路径"
   echo "  --top-n <n>              输出前 N 只候选，默认 30"
@@ -94,8 +94,7 @@ done
 mkdir -p "$OUT_DIR"
 
 CMD=(
-  src/strategy/complexity/run_complexity_scan.py
-  --strategy_name "$STRATEGY_NAME"
+  src/strategy/entropy_bifurcation_setup/run_entropy_bifurcation_scan.py
   --data_dir "$DATA_DIR"
   --out_dir "$OUT_DIR"
   --basic_path "$BASIC_PATH"

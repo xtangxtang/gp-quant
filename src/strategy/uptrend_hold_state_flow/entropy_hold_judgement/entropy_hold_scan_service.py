@@ -1,9 +1,9 @@
-import os
 from dataclasses import dataclass
 from typing import Any
 
 import pandas as pd
 
+from ..target_resolver import resolve_target
 from ..io_utils import normalize_trade_date
 from .entropy_hold_feature_engine import build_entropy_hold_feature_frame
 from .entropy_hold_report_writer import write_entropy_hold_outputs
@@ -23,94 +23,8 @@ class EntropyHoldConfig:
     exit_persist_days: int = 3
 
 
-def _build_symbol_from_ts_code(ts_code: str) -> str:
-    if not ts_code or "." not in ts_code:
-        return str(ts_code).lower()
-    code, exch = ts_code.split(".", 1)
-    return f"{exch.lower()}{code}"
-
-
-def _infer_ts_code_from_numeric(code: str) -> str:
-    c = str(code).strip()
-    if c.startswith("92"):
-        return f"{c}.BJ"
-    if c.startswith(("6", "9")):
-        return f"{c}.SH"
-    return f"{c}.SZ"
-
-
-def _load_basic_frame(basic_path: str) -> pd.DataFrame:
-    if not basic_path or not os.path.exists(basic_path):
-        return pd.DataFrame()
-    try:
-        df = pd.read_csv(basic_path, usecols=["ts_code", "symbol", "name", "area", "industry", "market"])
-        return df.fillna("") if not df.empty else pd.DataFrame()
-    except Exception:
-        return pd.DataFrame()
-
-
 def _resolve_target(symbol_or_name: str, data_dir: str, basic_path: str) -> dict[str, str]:
-    raw = str(symbol_or_name or "").strip()
-    if not raw:
-        raise ValueError("symbol_or_name is required")
-
-    basic_df = _load_basic_frame(basic_path)
-    lower = raw.lower()
-    ts_code = ""
-    symbol = ""
-    name = ""
-    area = ""
-    industry = ""
-    market = ""
-
-    if lower.startswith(("sh", "sz", "bj")):
-        symbol = lower
-        ts_code = _infer_ts_code_from_numeric(lower[2:]) if "." not in lower else lower.upper()
-    elif raw.endswith((".SH", ".SZ", ".BJ", ".sh", ".sz", ".bj")):
-        ts_code = raw.upper()
-        symbol = _build_symbol_from_ts_code(ts_code)
-    elif raw.isdigit():
-        ts_code = _infer_ts_code_from_numeric(raw)
-        symbol = _build_symbol_from_ts_code(ts_code)
-    else:
-        if basic_df.empty:
-            raise ValueError("basic_path is required when resolving by stock name")
-        exact = basic_df[basic_df["name"].astype(str) == raw]
-        if exact.empty:
-            partial = basic_df[basic_df["name"].astype(str).str.contains(raw, regex=False)]
-            if len(partial) != 1:
-                raise ValueError(f"Unable to uniquely resolve stock name: {raw}")
-            exact = partial
-        row = exact.iloc[0]
-        ts_code = str(row.get("ts_code") or "")
-        symbol = _build_symbol_from_ts_code(ts_code)
-        name = str(row.get("name") or "")
-        area = str(row.get("area") or "")
-        industry = str(row.get("industry") or "")
-        market = str(row.get("market") or "")
-
-    if basic_df is not None and not basic_df.empty and ts_code:
-        matched = basic_df[basic_df["ts_code"].astype(str) == ts_code]
-        if not matched.empty:
-            row = matched.iloc[0]
-            name = str(row.get("name") or name)
-            area = str(row.get("area") or area)
-            industry = str(row.get("industry") or industry)
-            market = str(row.get("market") or market)
-
-    file_path = os.path.join(data_dir, f"{symbol}.csv")
-    if not os.path.exists(file_path):
-        raise FileNotFoundError(f"CSV not found for {raw}: {file_path}")
-
-    return {
-        "symbol": symbol,
-        "ts_code": ts_code,
-        "name": name,
-        "area": area,
-        "industry": industry,
-        "market": market,
-        "file_path": file_path,
-    }
+    return resolve_target(symbol_or_name, data_dir, basic_path)
 
 
 def _infer_scan_date(df: pd.DataFrame, requested_scan_date: str) -> str:

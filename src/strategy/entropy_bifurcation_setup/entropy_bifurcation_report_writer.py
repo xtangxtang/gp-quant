@@ -30,7 +30,7 @@ def write_entropy_bifurcation_outputs(
     df_market = pd.DataFrame(market_rows)
     if not df_market.empty:
         df_market = df_market.sort_values(
-            ["strategy_state", "strategy_score", "entropy_quality", "bifurcation_quality", "amount"],
+            ["strategy_state", "context_score", "strategy_score", "bifurcation_quality", "amount"],
             ascending=[False, False, False, False, False],
         ).reset_index(drop=True)
     df_market.to_csv(market_snapshot_path, index=False)
@@ -38,8 +38,8 @@ def write_entropy_bifurcation_outputs(
     df_candidates = pd.DataFrame(candidate_rows)
     if not df_candidates.empty:
         df_candidates = df_candidates.sort_values(
-            ["strategy_score", "score_pct_rank", "bifurcation_pct_rank", "amount"],
-            ascending=[False, False, False, False],
+            ["context_score", "strategy_score", "bifurcation_quality", "path_irreversibility_20", "amount"],
+            ascending=[False, False, False, False, False],
         ).reset_index(drop=True)
     df_candidates.to_csv(candidates_all_path, index=False)
     df_candidates.head(int(top_n)).to_csv(candidates_top_path, index=False)
@@ -49,6 +49,7 @@ def write_entropy_bifurcation_outputs(
         df_selected = df_selected.sort_values(["selected_rank"], ascending=[True]).reset_index(drop=True)
     df_selected.to_csv(selected_path, index=False)
 
+    context_source = df_candidates if not df_candidates.empty else df_market
     summary = pd.DataFrame(
         [
             {
@@ -58,10 +59,24 @@ def write_entropy_bifurcation_outputs(
                 "n_state_true": int(df_market["strategy_state"].sum()) if not df_market.empty else 0,
                 "n_candidates": int(df_candidates["symbol"].nunique()) if not df_candidates.empty else 0,
                 "n_selected": int(df_selected["symbol"].nunique()) if not df_selected.empty else 0,
-                "n_selected_industries": int(df_selected["industry"].nunique()) if not df_selected.empty and "industry" in df_selected.columns else 0,
+                "n_abandoned": int(df_market["strategic_abandonment"].sum()) if not df_market.empty and "strategic_abandonment" in df_market.columns else 0,
+                "market_phase_state": str(context_source["market_phase_state"].iloc[0]) if not context_source.empty and "market_phase_state" in context_source.columns else "",
+                "market_regime_score": float(context_source["market_regime_score"].iloc[0]) if not context_source.empty and "market_regime_score" in context_source.columns else np.nan,
+                "market_coupling_entropy_20": float(context_source["market_coupling_entropy_20"].iloc[0]) if not context_source.empty and "market_coupling_entropy_20" in context_source.columns else np.nan,
+                "market_phase_distortion_share": float(context_source["market_phase_distortion_share"].iloc[0]) if not context_source.empty and "market_phase_distortion_share" in context_source.columns else np.nan,
+                "market_noise_cost": float(context_source["market_noise_cost"].iloc[0]) if not context_source.empty and "market_noise_cost" in context_source.columns else np.nan,
+                "avg_context_score": float(context_source["context_score"].mean()) if not context_source.empty and "context_score" in context_source.columns else np.nan,
+                "avg_stock_state_score": float(df_candidates["stock_state_score"].mean()) if not df_candidates.empty and "stock_state_score" in df_candidates.columns else np.nan,
+                "avg_execution_readiness_score": float(df_candidates["execution_readiness_score"].mean()) if not df_candidates.empty and "execution_readiness_score" in df_candidates.columns else np.nan,
+                "avg_execution_penalty_score": float(df_candidates["execution_penalty_score"].mean()) if not df_candidates.empty and "execution_penalty_score" in df_candidates.columns else np.nan,
+                "avg_abandonment_score": float(context_source["abandonment_score"].mean()) if not context_source.empty and "abandonment_score" in context_source.columns else np.nan,
+                "avg_position_scale": float(df_selected["position_scale"].mean()) if not df_selected.empty and "position_scale" in df_selected.columns else np.nan,
+                "avg_experimental_model_score": float(context_source["experimental_model_score"].mean()) if not context_source.empty and "experimental_model_score" in context_source.columns else np.nan,
                 "avg_strategy_score": float(df_candidates["strategy_score"].mean()) if not df_candidates.empty else np.nan,
                 "avg_entropy_quality": float(df_candidates["entropy_quality"].mean()) if not df_candidates.empty else np.nan,
                 "avg_bifurcation_quality": float(df_candidates["bifurcation_quality"].mean()) if not df_candidates.empty else np.nan,
+                "avg_path_irreversibility_20": float(df_candidates["path_irreversibility_20"].mean()) if not df_candidates.empty and "path_irreversibility_20" in df_candidates.columns else np.nan,
+                "avg_execution_cost_proxy_20": float(df_candidates["execution_cost_proxy_20"].mean()) if not df_candidates.empty and "execution_cost_proxy_20" in df_candidates.columns else np.nan,
             }
         ]
     )

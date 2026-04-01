@@ -3,11 +3,34 @@ import os
 from dataclasses import dataclass
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from .entropy_bifurcation_feature_engine import build_entropy_bifurcation_feature_frame
 from .entropy_bifurcation_report_writer import write_entropy_bifurcation_outputs
 from .entropy_bifurcation_signal_models import VALID_STRATEGIES, apply_strategy_model
+
+
+MARKET_REGIME_WEIGHTS = {
+    "low_entropy_share": 0.22,
+    "bifurcation_share": 0.26,
+    "energy_share": 0.10,
+    "breakout_share": 0.10,
+    "market_coupling_entropy_20": 0.20,
+    "low_noise_support": 0.12,
+}
+
+DECISION_LAYER_WEIGHTS = {
+    "stock_state": 0.70,
+    "market_gate": 0.20,
+    "execution_readiness": 0.10,
+    "experimental_model": 0.00,
+}
+
+EXECUTION_LAYER_WEIGHTS = {
+    "asset_execution_cost": 0.65,
+    "market_noise_cost": 0.35,
+}
 
 
 @dataclass(frozen=True)
@@ -48,6 +71,37 @@ def _industry_bucket(row: dict[str, Any]) -> str:
     return str(row.get("industry") or "UNKNOWN")
 
 
+def _normalized_shannon_entropy(weights: pd.Series) -> float:
+    values = pd.to_numeric(weights, errors="coerce").fillna(0.0).to_numpy(dtype=float)
+    values = values[values > 0.0]
+    if len(values) <= 1:
+        return 0.0
+    probabilities = values / float(values.sum())
+    entropy = float(-(probabilities * np.log(probabilities)).sum())
+    return entropy / float(np.log(len(probabilities)))
+
+
+def _market_phase_state(
+    regime_score: float,
+    low_entropy_share: float,
+    breakout_share: float,
+    noise_cost: float,
+    coupling_entropy: float,
+    phase_distortion_share: float,
+) -> str:
+    if noise_cost >= 0.82 or (phase_distortion_share >= 0.55 and regime_score < 0.30):
+        return "abandon"
+    if low_entropy_share >= 0.22 and breakout_share < 0.12 and coupling_entropy < 0.55 and phase_distortion_share < 0.45:
+        return "compression"
+    if regime_score >= 0.42 and breakout_share >= 0.16 and coupling_entropy >= 0.55 and phase_distortion_share < 0.40:
+        return "expansion"
+    if phase_distortion_share >= 0.45:
+        return "distorted"
+    if regime_score >= 0.26:
+        return "transition"
+    return "neutral"
+
+
 def _load_basic_info_map(basic_path: str) -> dict[str, dict[str, str]]:
     if not basic_path or not os.path.exists(basic_path):
         return {}
@@ -77,10 +131,10 @@ def _is_st_name(name: str) -> bool:
 def _resolve_files(data_dir: str, symbols_arg: str) -> list[str]:
     symbols = [symbol.strip() for symbol in str(symbols_arg).split(",") if symbol.strip()]
     if symbols:
-        files = [os.path.join(data_dir, f"{symbol}.csv") for symbol in symbols if os.path.exists(os.path.join(data_dir, f"{symbol}.csv"))]
-    else:
-        files = glob.glob(os.path.join(data_dir, "*.csv"))
-    return sorted(files)
+        return sorted(
+            [os.path.join(data_dir, f"{symbol}.csv") for symbol in symbols if os.path.exists(os.path.join(data_dir, f"{symbol}.csv"))]
+        )
+    return sorted(glob.glob(os.path.join(data_dir, "*.csv")))
 
 
 def _read_last_non_empty_line(file_path: str) -> str:
@@ -189,9 +243,7 @@ def _prepare_symbol_state(file_path: str, config: EntropyBifurcationScanConfig, 
     )
 
 
-def _prepare_all_symbols(
-    files: list[str], config: EntropyBifurcationScanConfig, basic_info_map: dict[str, dict[str, str]]
-) -> list[PreparedSymbol]:
+def _prepare_all_symbols(files: list[str], config: EntropyBifurcationScanConfig, basic_info_map: dict[str, dict[str, str]]) -> list[PreparedSymbol]:
     prepared: list[PreparedSymbol] = []
     for file_path in files:
         item = _prepare_symbol_state(file_path, config, basic_info_map)
@@ -227,14 +279,22 @@ def _build_snapshot_row(prepared: PreparedSymbol, scan_date: str) -> dict[str, A
         "entropy_quality": float(row["entropy_quality"]) if pd.notna(row.get("entropy_quality")) else None,
         "bifurcation_quality": float(row["bifurcation_quality"]) if pd.notna(row.get("bifurcation_quality")) else None,
         "trigger_quality": float(row["trigger_quality"]) if pd.notna(row.get("trigger_quality")) else None,
+        "execution_quality": float(row["execution_quality"]) if pd.notna(row.get("execution_quality")) else None,
         "entropy_percentile_120": float(row["entropy_percentile_120"]) if pd.notna(row.get("entropy_percentile_120")) else None,
         "entropy_gap": float(row["entropy_gap"]) if pd.notna(row.get("entropy_gap")) else None,
         "perm_entropy_20_norm": float(row["perm_entropy_20_norm"]) if pd.notna(row.get("perm_entropy_20_norm")) else None,
         "perm_entropy_60_norm": float(row["perm_entropy_60_norm"]) if pd.notna(row.get("perm_entropy_60_norm")) else None,
         "ar1_20": float(row["ar1_20"]) if pd.notna(row.get("ar1_20")) else None,
+        "phase_adjusted_ar1_20": float(row["phase_adjusted_ar1_20"]) if pd.notna(row.get("phase_adjusted_ar1_20")) else None,
+        "phase_distortion_20": float(row["phase_distortion_20"]) if pd.notna(row.get("phase_distortion_20")) else None,
+        "dominant_eig_20": float(row["dominant_eig_20"]) if pd.notna(row.get("dominant_eig_20")) else None,
+        "dominant_eig_abs_20": float(row["dominant_eig_abs_20"]) if pd.notna(row.get("dominant_eig_abs_20")) else None,
         "recovery_rate_20": float(row["recovery_rate_20"]) if pd.notna(row.get("recovery_rate_20")) else None,
         "state_skew_20": float(row["state_skew_20"]) if pd.notna(row.get("state_skew_20")) else None,
         "var_lift_10_20": float(row["var_lift_10_20"]) if pd.notna(row.get("var_lift_10_20")) else None,
+        "path_irreversibility_20": float(row["path_irreversibility_20"]) if pd.notna(row.get("path_irreversibility_20")) else None,
+        "coarse_entropy_lb_20": float(row["coarse_entropy_lb_20"]) if pd.notna(row.get("coarse_entropy_lb_20")) else None,
+        "entropy_accel_5": float(row["entropy_accel_5"]) if pd.notna(row.get("entropy_accel_5")) else None,
         "breakout_10": float(row["breakout_10"]) if pd.notna(row.get("breakout_10")) else None,
         "breakout_20": float(row["breakout_20"]) if pd.notna(row.get("breakout_20")) else None,
         "volume_impulse_5_20": float(row["volume_impulse_5_20"]) if pd.notna(row.get("volume_impulse_5_20")) else None,
@@ -242,24 +302,272 @@ def _build_snapshot_row(prepared: PreparedSymbol, scan_date: str) -> dict[str, A
         "energy_impulse": float(row["energy_impulse"]) if pd.notna(row.get("energy_impulse")) else None,
         "order_alignment": float(row["order_alignment"]) if pd.notna(row.get("order_alignment")) else None,
         "mf_z_60": float(row["mf_z_60"]) if pd.notna(row.get("mf_z_60")) else None,
+        "execution_cost_proxy_20": float(row["execution_cost_proxy_20"]) if pd.notna(row.get("execution_cost_proxy_20")) else None,
+        "strategic_abandonment_seed": bool(row.get("strategic_abandonment_seed")) if pd.notna(row.get("strategic_abandonment_seed")) else False,
+        "experimental_tda_score": row.get("experimental_tda_score"),
+        "experimental_reservoir_tipping_score": row.get("experimental_reservoir_tipping_score"),
+        "experimental_structure_latent_score": row.get("experimental_structure_latent_score"),
+        "latent_compression_score": float(row["latent_compression_score"]) if pd.notna(row.get("latent_compression_score")) else None,
+        "latent_instability_score": float(row["latent_instability_score"]) if pd.notna(row.get("latent_instability_score")) else None,
+        "latent_launch_score": float(row["latent_launch_score"]) if pd.notna(row.get("latent_launch_score")) else None,
+        "latent_diffusion_score": float(row["latent_diffusion_score"]) if pd.notna(row.get("latent_diffusion_score")) else None,
+        "latent_state_label": str(row.get("latent_state_label") or ""),
+        "stock_state_score": float(row["stock_state_score"]) if pd.notna(row.get("stock_state_score")) else None,
     }
 
 
-def _augment_cross_section(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _execution_cost_state(execution_penalty_score: float) -> str:
+    if execution_penalty_score >= 0.78:
+        return "blocked"
+    if execution_penalty_score >= 0.60:
+        return "cautious"
+    return "normal"
+
+
+def _experimental_model_score(df: pd.DataFrame) -> pd.Series:
+    columns = [
+        "experimental_tda_score",
+        "experimental_reservoir_tipping_score",
+        "experimental_structure_latent_score",
+    ]
+    present = [column for column in columns if column in df.columns]
+    if not present:
+        return pd.Series(0.0, index=df.index, dtype="float64")
+    frame = df[present].apply(pd.to_numeric, errors="coerce")
+    return frame.mean(axis=1).fillna(0.0)
+
+
+def _series_window_values(prepared: PreparedSymbol, scan_date: str, column: str, lookback: int) -> np.ndarray | None:
+    idx = prepared.date_to_index.get(str(scan_date))
+    if idx is None:
+        return None
+    start_idx = max(0, idx - int(lookback) + 1)
+    window = pd.to_numeric(prepared.signal_daily.iloc[start_idx : idx + 1][column], errors="coerce").to_numpy(dtype=np.float64)
+    if np.isfinite(window).sum() < max(8, int(lookback) // 2):
+        return None
+    return window
+
+
+def _market_coupling_entropy_20(prepared_symbols: list[PreparedSymbol], scan_date: str, lookback: int = 20) -> float:
+    industry_windows: dict[str, list[np.ndarray]] = {}
+    for prepared in prepared_symbols:
+        industry = str(prepared.industry or "UNKNOWN")
+        window = _series_window_values(prepared, scan_date, "log_ret_1", lookback)
+        if window is None:
+            continue
+        industry_windows.setdefault(industry, []).append(window)
+
+    aggregated: dict[str, np.ndarray] = {}
+    for industry, windows in industry_windows.items():
+        min_len = min(len(window) for window in windows)
+        if min_len < 8:
+            continue
+        stack = np.vstack([window[-min_len:] for window in windows])
+        aggregated[industry] = np.nanmean(stack, axis=0)
+
+    if len(aggregated) <= 1:
+        return 0.0
+
+    industries = sorted(aggregated)
+    adjacency = np.zeros((len(industries), len(industries)), dtype=np.float64)
+    for left_idx, left_industry in enumerate(industries):
+        left = aggregated[left_industry]
+        for right_idx, right_industry in enumerate(industries):
+            if left_idx == right_idx:
+                continue
+            right = aggregated[right_industry]
+            common_len = min(len(left), len(right))
+            if common_len < 8:
+                continue
+            left_now = left[-common_len + 1 :]
+            right_prev = right[-common_len:-1]
+            mask = np.isfinite(left_now) & np.isfinite(right_prev)
+            if int(mask.sum()) < 6:
+                continue
+            corr = float(np.corrcoef(left_now[mask], right_prev[mask])[0, 1])
+            if np.isfinite(corr) and corr > 0.0:
+                adjacency[left_idx, right_idx] = corr
+
+    strengths = adjacency.sum(axis=1)
+    return _normalized_shannon_entropy(pd.Series(strengths, dtype="float64"))
+
+
+def _entry_plan(row: dict[str, Any]) -> dict[str, Any]:
+    context_score = float(row.get("context_score") or 0.0)
+    execution_state = str(row.get("execution_cost_state") or "normal")
+    market_phase_state = str(row.get("market_phase_state") or "neutral")
+    if bool(row.get("strategic_abandonment")):
+        return {"position_scale": 0.0, "entry_mode": "skip", "staged_entry_days": 0, "exit_mode": "abandon"}
+
+    if execution_state == "cautious" or market_phase_state in {"compression", "distorted"}:
+        position_scale = float(np.clip(0.25 + 0.40 * context_score, 0.25, 0.60))
+        return {
+            "position_scale": position_scale,
+            "entry_mode": "probe",
+            "staged_entry_days": 3,
+            "exit_mode": "reduce",
+        }
+
+    if market_phase_state == "transition":
+        position_scale = float(np.clip(0.35 + 0.45 * context_score, 0.35, 0.75))
+        return {
+            "position_scale": position_scale,
+            "entry_mode": "staged",
+            "staged_entry_days": 2,
+            "exit_mode": "trail",
+        }
+
+    position_scale = float(np.clip(0.45 + 0.55 * context_score, 0.45, 1.00))
+    return {
+        "position_scale": position_scale,
+        "entry_mode": "full",
+        "staged_entry_days": 1,
+        "exit_mode": "trail",
+    }
+
+
+def _augment_cross_section(
+    rows: list[dict[str, Any]], prepared_symbols: list[PreparedSymbol] | None = None, scan_date: str = ""
+) -> list[dict[str, Any]]:
     if not rows:
         return rows
     df = pd.DataFrame(rows)
-    df["strategy_score"] = pd.to_numeric(df.get("strategy_score"), errors="coerce")
-    df["entropy_quality"] = pd.to_numeric(df.get("entropy_quality"), errors="coerce")
-    df["bifurcation_quality"] = pd.to_numeric(df.get("bifurcation_quality"), errors="coerce")
-    df["trigger_quality"] = pd.to_numeric(df.get("trigger_quality"), errors="coerce")
-    df["breakout_10"] = pd.to_numeric(df.get("breakout_10"), errors="coerce")
+    for column in [
+        "strategy_score",
+        "stock_state_score",
+        "entropy_quality",
+        "bifurcation_quality",
+        "trigger_quality",
+        "execution_quality",
+        "breakout_10",
+        "entropy_percentile_120",
+        "dominant_eig_abs_20",
+        "energy_impulse",
+        "turnover_rate",
+        "state_skew_20",
+        "path_irreversibility_20",
+        "execution_cost_proxy_20",
+        "phase_distortion_20",
+        "experimental_tda_score",
+        "experimental_reservoir_tipping_score",
+        "experimental_structure_latent_score",
+    ]:
+        df[column] = pd.to_numeric(df.get(column), errors="coerce")
     df["strategy_state"] = pd.Series(df.get("strategy_state"), dtype="boolean").fillna(False).astype(bool)
+
+    low_entropy_share = float((df["entropy_percentile_120"] <= 0.25).mean()) if not df.empty else 0.0
+    breakout_share = float((df["breakout_10"] > 0.0).mean()) if not df.empty else 0.0
+    energy_share = float((df["energy_impulse"] > 0.0).mean()) if not df.empty else 0.0
+    bifurcation_share = float(((df["dominant_eig_abs_20"] >= 0.72) & (df["path_irreversibility_20"] >= 0.01)).mean()) if not df.empty else 0.0
+    phase_distortion_share = float((df["phase_distortion_20"] >= 0.08).mean()) if df["phase_distortion_20"].notna().any() else 0.0
+
+    industry_series = df["industry"].fillna("UNKNOWN") if "industry" in df.columns else pd.Series("UNKNOWN", index=df.index)
+    positive_industry_energy = (
+        df.assign(industry_bucket=industry_series)
+        .groupby("industry_bucket")["energy_impulse"]
+        .apply(lambda series: float(np.maximum(series.to_numpy(dtype=float), 0.0).sum()))
+    )
+    if prepared_symbols and scan_date:
+        market_coupling_entropy_20 = _market_coupling_entropy_20(prepared_symbols, scan_date, lookback=20)
+    else:
+        market_coupling_entropy_20 = _normalized_shannon_entropy(positive_industry_energy)
+
+    breakout_noise = float(df["breakout_10"].abs().median()) if df["breakout_10"].notna().any() else 0.0
+    turnover_noise = float(df["turnover_rate"].median()) if df["turnover_rate"].notna().any() else 0.0
+    skew_noise = float(df["state_skew_20"].abs().median()) if df["state_skew_20"].notna().any() else 0.0
+    execution_noise = float(df["execution_cost_proxy_20"].median()) if df["execution_cost_proxy_20"].notna().any() else 0.0
+    market_noise_cost = float(
+        np.clip(
+            0.28 * (breakout_noise / 0.04)
+            + 0.18 * (turnover_noise / 6.0)
+            + 0.16 * (skew_noise / 1.0)
+            + 0.18 * execution_noise
+            + 0.20 * phase_distortion_share,
+            0.0,
+            1.0,
+        )
+    )
+    market_regime_score = float(
+        np.clip(
+            MARKET_REGIME_WEIGHTS["low_entropy_share"] * low_entropy_share
+            + MARKET_REGIME_WEIGHTS["bifurcation_share"] * bifurcation_share
+            + MARKET_REGIME_WEIGHTS["energy_share"] * energy_share
+            + MARKET_REGIME_WEIGHTS["breakout_share"] * breakout_share
+            + MARKET_REGIME_WEIGHTS["market_coupling_entropy_20"] * market_coupling_entropy_20
+            + MARKET_REGIME_WEIGHTS["low_noise_support"] * (1.0 - market_noise_cost),
+            0.0,
+            1.0,
+        )
+    )
+    phase_state = _market_phase_state(
+        market_regime_score,
+        low_entropy_share,
+        breakout_share,
+        market_noise_cost,
+        market_coupling_entropy_20,
+        phase_distortion_share,
+    )
+    execution_penalty_score = np.clip(
+        EXECUTION_LAYER_WEIGHTS["asset_execution_cost"] * df["execution_cost_proxy_20"].fillna(1.0)
+        + EXECUTION_LAYER_WEIGHTS["market_noise_cost"] * market_noise_cost,
+        0.0,
+        1.0,
+    )
+    execution_readiness_score = np.clip(1.0 - execution_penalty_score, 0.0, 1.0)
+    experimental_model_score = _experimental_model_score(df)
+    stock_state_series = df["stock_state_score"].fillna(df["strategy_score"].fillna(0.0))
+    abandonment_score = np.clip(
+        0.30 * execution_penalty_score
+        + 0.25 * market_noise_cost
+        + 0.20 * phase_distortion_share
+        + 0.15 * (1.0 - stock_state_series)
+        + 0.10 * (1.0 - market_coupling_entropy_20),
+        0.0,
+        1.0,
+    )
+
+    df["market_low_entropy_share"] = low_entropy_share
+    df["market_breakout_share"] = breakout_share
+    df["market_energy_share"] = energy_share
+    df["market_bifurcation_share"] = bifurcation_share
+    df["market_phase_distortion_share"] = phase_distortion_share
+    df["market_coupling_entropy_20"] = market_coupling_entropy_20
+    df["market_noise_cost"] = market_noise_cost
+    df["market_regime_score"] = market_regime_score
+    df["market_phase_state"] = phase_state
+    df["execution_penalty_score"] = execution_penalty_score
+    df["execution_readiness_score"] = execution_readiness_score
+    df["experimental_model_score"] = experimental_model_score
+    df["execution_cost_state"] = [_execution_cost_state(float(score or 0.0)) for score in execution_penalty_score.tolist()]
+    df["abandonment_score"] = abandonment_score
+    df["strategic_abandonment"] = (
+        df["strategic_abandonment_seed"].fillna(False).astype(bool)
+        | (df["execution_cost_state"] == "blocked")
+        | (df["market_phase_state"] == "abandon")
+        | ((df["execution_penalty_score"] >= 0.70) & (stock_state_series < 0.62))
+        | ((market_noise_cost >= 0.78) & (market_coupling_entropy_20 < 0.30))
+        | (abandonment_score >= 0.74)
+    )
+    df["context_score"] = np.clip(
+        DECISION_LAYER_WEIGHTS["stock_state"] * stock_state_series
+        + DECISION_LAYER_WEIGHTS["market_gate"] * market_regime_score
+        + DECISION_LAYER_WEIGHTS["execution_readiness"] * df["execution_readiness_score"].fillna(0.0)
+        + DECISION_LAYER_WEIGHTS["experimental_model"] * df["experimental_model_score"].fillna(0.0)
+        - 0.30 * df["strategic_abandonment"].astype(float),
+        0.0,
+        1.0,
+    )
+    plans = [_entry_plan(row) for row in df.to_dict(orient="records")]
+    df["position_scale"] = [float(plan["position_scale"]) for plan in plans]
+    df["entry_mode"] = [str(plan["entry_mode"]) for plan in plans]
+    df["staged_entry_days"] = [int(plan["staged_entry_days"]) for plan in plans]
+    df["exit_mode"] = [str(plan["exit_mode"]) for plan in plans]
+
     df["score_pct_rank"] = df["strategy_score"].rank(pct=True, method="average")
     df["entropy_pct_rank"] = df["entropy_quality"].rank(pct=True, method="average")
     df["bifurcation_pct_rank"] = df["bifurcation_quality"].rank(pct=True, method="average")
     df["trigger_pct_rank"] = df["trigger_quality"].rank(pct=True, method="average")
-    df["breakout_pct_rank"] = df["breakout_10"].rank(pct=True, method="average")
+    df["context_score_pct_rank"] = df["context_score"].rank(pct=True, method="average")
     return df.to_dict(orient="records")
 
 
@@ -274,9 +582,19 @@ def _passes_candidate_filters(row: dict[str, Any], config: EntropyBifurcationSca
         return False
     if turnover_rate < float(config.min_turnover):
         return False
-    if float(row.get("score_pct_rank") or 0.0) < 0.80:
+    if bool(row.get("strategic_abandonment")):
         return False
-    if float(row.get("bifurcation_pct_rank") or 0.0) < 0.70:
+    if str(row.get("execution_cost_state") or "") == "blocked":
+        return False
+    if str(row.get("market_phase_state") or "") == "abandon":
+        return False
+    if str(row.get("execution_cost_state") or "") == "cautious" and float(row.get("stock_state_score") or row.get("strategy_score") or 0.0) < 0.62:
+        return False
+    if str(row.get("market_phase_state") or "") == "distorted" and float(row.get("stock_state_score") or row.get("strategy_score") or 0.0) < 0.45:
+        return False
+    if float(row.get("market_regime_score") or 0.0) < 0.10:
+        return False
+    if float(row.get("context_score") or 0.0) < 0.45:
         return False
     return True
 
@@ -285,40 +603,39 @@ def _sort_candidate_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(
         rows,
         key=lambda row: (
-            float(row.get("strategy_score") or -999.0),
+            float(row.get("context_score") or -999.0),
+            float(row.get("stock_state_score") or row.get("strategy_score") or -999.0),
+            float(row.get("market_regime_score") or -999.0),
+            float(row.get("execution_readiness_score") or -999.0),
+            float(row.get("position_scale") or -999.0),
             float(row.get("bifurcation_quality") or -999.0),
-            float(row.get("entropy_quality") or -999.0),
-            float(row.get("amount") or 0.0),
+            float(row.get("path_irreversibility_20") or -999.0),
+            float(row.get("dominant_eig_abs_20") or -999.0),
+            float(row.get("amount") or -999.0),
         ),
         reverse=True,
     )
 
 
-def _select_candidate_rows(
-    candidate_rows: list[dict[str, Any]], target_count: int, max_positions_per_industry: int
-) -> tuple[list[dict[str, Any]], int]:
-    selected_rows: list[dict[str, Any]] = []
-    skipped_industry = 0
+def _select_candidate_rows(rows: list[dict[str, Any]], top_n: int, max_positions_per_industry: int) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    selected: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
     industry_counts: dict[str, int] = {}
-
-    for row in candidate_rows:
-        if len(selected_rows) >= int(target_count):
+    for row in rows:
+        if len(selected) >= int(top_n):
             break
         industry = _industry_bucket(row)
         if int(max_positions_per_industry) > 0 and industry_counts.get(industry, 0) >= int(max_positions_per_industry):
-            skipped_industry += 1
+            skipped.append(dict(row))
             continue
         industry_counts[industry] = industry_counts.get(industry, 0) + 1
-        selected_rows.append(dict(row))
+        selected.append(dict(row))
+    return selected, skipped
 
-    return selected_rows, skipped_industry
 
-
-def _build_scan_rows(
-    prepared_symbols: list[PreparedSymbol], config: EntropyBifurcationScanConfig
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+def _build_scan_rows(prepared_symbols: list[PreparedSymbol], config: EntropyBifurcationScanConfig) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     market_rows = [row for row in (_build_snapshot_row(prepared, str(config.scan_date)) for prepared in prepared_symbols) if row]
-    market_rows = _augment_cross_section(market_rows)
+    market_rows = _augment_cross_section(market_rows, prepared_symbols, str(config.scan_date))
     candidate_rows = [dict(row) for row in market_rows if _passes_candidate_filters(row, config)]
     candidate_rows = _sort_candidate_rows(candidate_rows)
     selected_candidates, _ = _select_candidate_rows(candidate_rows, int(config.top_n), int(config.max_positions_per_industry))
@@ -378,9 +695,30 @@ def _daily_mark_to_market_return(prepared: PreparedSymbol, trade: dict[str, Any]
     return current_close / prev_close - 1.0
 
 
-def _run_forward_backtest(
-    prepared_symbols: list[PreparedSymbol], config: EntropyBifurcationScanConfig
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any] | None]:
+def _position_live_scale(prepared: PreparedSymbol, trade: dict[str, Any], current_date: str) -> float:
+    if str(current_date) < str(trade.get("entry_date") or "") or str(current_date) > str(trade.get("exit_date") or ""):
+        return 0.0
+    target_scale = float(trade.get("position_scale") or 0.0)
+    if target_scale <= 0.0:
+        return 0.0
+    current_idx = prepared.date_to_index.get(str(current_date))
+    entry_idx = prepared.date_to_index.get(str(trade.get("entry_date") or ""))
+    if current_idx is None or entry_idx is None:
+        return target_scale
+    held_days = max(0, current_idx - entry_idx)
+    mode = str(trade.get("entry_mode") or "full")
+    if mode == "probe":
+        schedule = [0.35, 0.65, 1.00]
+        fraction = schedule[min(held_days, len(schedule) - 1)]
+        return target_scale * fraction
+    if mode == "staged":
+        schedule = [0.50, 1.00]
+        fraction = schedule[min(held_days, len(schedule) - 1)]
+        return target_scale * fraction
+    return target_scale
+
+
+def _run_forward_backtest(prepared_symbols: list[PreparedSymbol], config: EntropyBifurcationScanConfig) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any] | None]:
     if not config.backtest_start_date or not config.backtest_end_date:
         return [], [], None
 
@@ -402,7 +740,7 @@ def _run_forward_backtest(
     for scan_date in ordered_scan_dates:
         active_positions = [pos for pos in active_positions if str(pos["exit_date"]) >= scan_date]
         market_rows_day = [row for row in (_build_snapshot_row(prepared, scan_date) for prepared in prepared_symbols) if row is not None]
-        market_rows_day = _augment_cross_section(market_rows_day)
+        market_rows_day = _augment_cross_section(market_rows_day, prepared_symbols, scan_date)
         candidate_rows_day = [dict(row) for row in market_rows_day if _passes_candidate_filters(row, config)]
         candidate_rows_day = _sort_candidate_rows(candidate_rows_day)[: int(config.top_n)]
 
@@ -441,20 +779,26 @@ def _run_forward_backtest(
                     "entry_date": entry_date,
                     "exit_date": str(trade["exit_date"]),
                     "entry_price": float(trade["entry_price"]),
+                    "position_scale": float(trade.get("position_scale") or 0.0),
+                    "entry_mode": str(trade.get("entry_mode") or "full"),
+                    "staged_entry_days": int(trade.get("staged_entry_days") or 1),
                 }
             )
             accepted_today += 1
 
-        active_trade_returns: list[float] = []
+        weighted_return_sum = 0.0
+        gross_exposure = 0.0
         for position in active_positions:
             prepared = symbol_lookup.get(str(position["symbol"]))
             if prepared is None:
                 continue
             trade_return = _daily_mark_to_market_return(prepared, position, scan_date)
-            if trade_return is not None:
-                active_trade_returns.append(float(trade_return))
+            live_scale = _position_live_scale(prepared, position, scan_date)
+            if trade_return is not None and live_scale > 0.0:
+                weighted_return_sum += float(live_scale) * float(trade_return)
+                gross_exposure += float(live_scale)
 
-        strategy_daily_return = float(sum(active_trade_returns) / len(active_trade_returns)) if active_trade_returns else 0.0
+        strategy_daily_return = weighted_return_sum / max(float(config.max_positions), 1.0)
         nav *= 1.0 + strategy_daily_return
         realized_trades = [trade for trade in trades if str(trade["exit_date"]) == scan_date]
 
@@ -466,7 +810,8 @@ def _run_forward_backtest(
                 "n_selected": accepted_today,
                 "n_skipped_full": skipped_full,
                 "n_skipped_industry": skipped_industry,
-                "active_positions": int(len(active_trade_returns)),
+                "active_positions": int(sum(_position_live_scale(symbol_lookup[str(pos["symbol"])], pos, scan_date) > 0.0 for pos in active_positions if str(pos["symbol"]) in symbol_lookup)),
+                "gross_exposure": float(gross_exposure),
                 "realized_trades": int(len(realized_trades)),
                 "strategy_daily_return": float(strategy_daily_return * 100.0),
                 "nav": float(nav),
@@ -508,6 +853,7 @@ def _run_forward_backtest(
         "avg_return_pct": float(df_trades["return_pct"].mean()),
         "median_return_pct": float(df_trades["return_pct"].median()),
         "avg_max_runup_pct": float(df_trades["max_runup_pct"].mean()),
+        "avg_position_scale": float(df_trades["position_scale"].mean()) if "position_scale" in df_trades.columns else np.nan,
         "final_nav": float(nav),
         "total_return_pct": float((nav - 1.0) * 100.0),
         "max_drawdown_pct": max_drawdown_pct,

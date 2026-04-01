@@ -1,0 +1,5 @@
+__pycache__/
+*.py[cod]
+_smoke_out/
+_smoke_total/
+_smoke*/

@@ -84,6 +84,109 @@ pip install -r requirements.txt
 - `--symbols sh600000,sz000001`
 - `--list-file tushare_gplist.json`
 
+### 2.5. 增量同步 A 股 1 分钟数据
+
+默认落盘到：`gp-data/trade/<symbol>/<YYYY-MM-DD>.csv`
+
+默认行为：
+
+- 优先使用免费 Eastmoney 分钟源
+- 自动跳过已经完整落盘的日文件
+- 未显式指定日期时，只同步最近 `3` 个交易日，便于日常增量更新和补漏
+- 默认使用原始分钟价 `fqt=0`，避免在缺少额外复权辅助模块时出现语义偏差
+- 现在已补齐 Eastmoney 辅助模块：`--fqt 1/2` 可做分钟价复权，分钟文件里的 `换手率(%)` 也会按流通股本补齐
+- 现在会自动读取 `failed_tasks.json`，优先续跑历史失败任务，并在初始轮结束后对失败项做多轮自动续跑
+- 当主源是免费 `em/tx` 时，失败续跑轮次会在 Eastmoney 和 Tencent 之间自动切换主源，降低单一网页源的连续压力
+
+```bash
+./scripts/run_sync_a_share_1m.sh -o /nvme5/xtang/gp-workspace/gp-data
+```
+
+常见用法：
+
+```bash
+# 只更新最近 1 个交易日
+./scripts/run_sync_a_share_1m.sh \
+    -o /nvme5/xtang/gp-workspace/gp-data \
+    --recent-open-days 1
+
+# 只续跑失败队列，适合免费网页源偶发网络抖动后的补漏
+./scripts/run_sync_a_share_1m.sh \
+    -o /nvme5/xtang/gp-workspace/gp-data \
+    --recent-open-days 3 \
+    --retry-failed-only
+
+# 初始轮先走 Eastmoney，失败续跑轮次自动切到 Tencent 再切回 Eastmoney
+./scripts/run_sync_a_share_1m.sh \
+    -o /nvme5/xtang/gp-workspace/gp-data \
+    --recent-open-days 3 \
+    --threads 3
+
+# 只拉少量股票做 smoke test
+./scripts/run_sync_a_share_1m.sh \
+    -o /nvme5/xtang/gp-workspace/gp-data \
+    --symbols sh600000,sz000001 \
+    --recent-open-days 1
+
+# 如果你有 Tushare 分钟权限，可以切到 ts 源
+./scripts/run_sync_a_share_1m.sh \
+    -o /nvme5/xtang/gp-workspace/gp-data \
+    --source ts \
+    --token <your_tushare_token> \
+    --start-date 20260327 \
+    --end-date 20260330
+```
+
+限制说明：
+
+- 免费 Eastmoney / Tencent 分钟接口通常只覆盖最近几个交易日，不适合补很久以前的 1 分钟历史
+- 如果要做更长历史区间回补，通常需要 `--source ts` 且你的 Tushare 账户具备分钟权限
+- 免费网页源批量抓取时仍可能出现代理或限流抖动；现在脚本会把失败项写入 `failed_tasks.json` 并自动续跑，但不能保证一次性全量成功
+
+### 2.6. 交易日 16:00 自动定时更新
+
+如果你希望在每个交易日下午 `4:00` 自动更新全量增量数据，可以直接运行：
+
+```bash
+./scripts/run_eod_data_scheduler.sh -o /nvme5/xtang/gp-workspace/gp-data
+```
+
+默认行为：
+
+- 每个交易日本地时间 `16:00` 触发
+- 先运行 `fast_sync_tushare_latest.py`，增量更新股票列表、交易日历、日线、复权、停复牌、分红和财务数据
+- 再运行当天的 `1` 分钟同步，只抓当前交易日，并默认使用 `Tencent` 作为主源
+- 同一天只会成功跑一次；如果当天任务失败，达到冷却时间后会再次尝试
+- 调度器会在 `gp-data/.eod_data_scheduler_state.json` 记录状态，并在 `gp-data/.eod_data_scheduler.lock` 上锁，避免重复启动
+- 调度器 stdout 会持续打印当前状态：启动时已加载状态、空闲等待心跳、`fast_sync` / `minute_sync` 分阶段进度，以及最终 `all_done=yes/no`
+
+常见用法：
+
+```bash
+# 立即执行一次并退出，适合 smoke test
+./scripts/run_eod_data_scheduler.sh \
+    -o /nvme5/xtang/gp-workspace/gp-data \
+    --run-now \
+    --run-once
+
+# 只打印会执行哪些命令，不真正下载
+./scripts/run_eod_data_scheduler.sh \
+    -o /nvme5/xtang/gp-workspace/gp-data \
+    --run-now \
+    --run-once \
+    --dry-run
+
+# 后台常驻运行
+nohup ./scripts/run_eod_data_scheduler.sh \
+    -o /nvme5/xtang/gp-workspace/gp-data \
+    > /tmp/gp_quant_eod_scheduler.log 2>&1 &
+
+# 把空闲状态心跳调成每 60 秒打印一次
+./scripts/run_eod_data_scheduler.sh \
+    -o /nvme5/xtang/gp-workspace/gp-data \
+    --status-log-interval-seconds 60
+```
+
 ### 3. 只下载扩展数据
 
 ```bash

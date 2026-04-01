@@ -5,9 +5,9 @@ from pathlib import Path
 if __package__:
     from .entropy_bifurcation_scan_service import EntropyBifurcationScanConfig, run_entropy_bifurcation_scan
 else:
-    _PROJECT_ROOT = Path(__file__).resolve().parents[3]
-    if str(_PROJECT_ROOT) not in sys.path:
-        sys.path.insert(0, str(_PROJECT_ROOT))
+    project_root = Path(__file__).resolve().parents[3]
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
     from src.strategy.entropy_bifurcation_setup.entropy_bifurcation_scan_service import (
         EntropyBifurcationScanConfig,
         run_entropy_bifurcation_scan,

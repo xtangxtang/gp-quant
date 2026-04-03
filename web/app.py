@@ -19,10 +19,12 @@ DEFAULT_OUTPUT_ROOT = REPO_ROOT / "results" / "strategy_runs"
 STRATEGY_LABELS = {
   "entropy_bifurcation_setup": "熵分叉启动",
   "uptrend_hold_state_flow": "上升趋势持有状态图",
+  "continuous_decline_recovery": "连续下跌修复买点",
 }
 STRATEGY_TAGLINES = {
   "entropy_bifurcation_setup": "用市场门控、低熵压缩、分叉触发和分段执行去筛选启动股。",
   "uptrend_hold_state_flow": "把上升趋势里的熵秩序持有、快速扩张持有、快速扩张衰竭退出放进一张状态图里，从买点开始评估整段持有路径。",
+  "continuous_decline_recovery": "在连续下跌后的第一段修复里，先定市场买点，再排领先行业，最后选最先完成修复的股票。",
 }
 STRATEGY_VARIANT_LABELS = {
   "compression_breakout": "低熵压缩突破",
@@ -59,6 +61,13 @@ EXECUTION_STATE_LABELS = {
   "normal": "执行正常",
   "cautious": "谨慎执行",
   "blocked": "执行阻断",
+}
+MARKET_BUY_STATE_LABELS = {
+  "no_setup": "没有连续下跌前提",
+  "selloff": "下跌仍在继续",
+  "repair_watch": "修复观察期",
+  "buy_window": "修复买入窗口",
+  "rebound_crowded": "反弹过热期",
 }
 
 
@@ -2133,6 +2142,8 @@ APP_HTML = """<!doctype html>
         ? ['symbol', 'name', 'start_date', 'scan_date', 'judgement', 'strategy_state', 'strategy_score', 'expansion_thrust', 'acceptance_score', 'instability_risk', 'holding_return_pct']
         : strategyId.includes('entropy_hold_judgement')
         ? ['symbol', 'name', 'start_date', 'scan_date', 'judgement', 'strategy_state', 'strategy_score', 'disorder_pressure', 'first_exit_date', 'holding_return_pct']
+        : strategyId.includes('continuous_decline_recovery')
+        ? ['symbol', 'name', 'industry', 'market_buy_state', 'sector_rank', 'sector_score', 'strategy_score', 'damage_score', 'repair_score', 'entry_window_score', 'flow_support_score', 'rebound_from_low_10', 'relative_strength_vs_sector_5', 'entry_mode']
         : isEntropyStrategy(strategyId)
         ? ['symbol', 'name', 'industry', 'market', 'market_phase_state', 'strategy_state', 'context_score', 'stock_state_score', 'strategy_score', 'entropy_quality', 'bifurcation_quality', 'trigger_quality', 'execution_readiness_score', 'execution_penalty_score', 'abandonment_score', 'entry_mode', 'position_scale']
         : ['symbol', 'name', 'industry', 'market', 'strategy_score', 'resonance_score', 'support_count', 'energy_term', 'amount', 'turnover_rate'];
@@ -2733,6 +2744,10 @@ def _phase_label(value: Any) -> str:
   return _lookup_label(MARKET_PHASE_LABELS, value)
 
 
+def _market_buy_state_label(value: Any) -> str:
+  return _lookup_label(MARKET_BUY_STATE_LABELS, value)
+
+
 def _entry_mode_label(value: Any) -> str:
   return _lookup_label(ENTRY_MODE_LABELS, value)
 
@@ -2913,6 +2928,12 @@ def _selected_reason_text(row: dict[str, Any], strategy: dict[str, Any]) -> str:
       f"上下文分数 {_fmt_num(row.get('context_score'))}，熵质量 {_fmt_num(row.get('entropy_quality'))}，"
       f"分叉质量 {_fmt_num(row.get('bifurcation_quality'))}，触发质量 {_fmt_num(row.get('trigger_quality'))}。"
     )
+  if variant == "continuous_decline_recovery":
+    return (
+      f"当前市场处于 {_market_buy_state_label(row.get('market_buy_state'))}，所在行业排名 #{_int_or_zero(row.get('sector_rank'))}，"
+      f"近10日跌幅 {_fmt_pct(row.get('ret_10'))}，当前自10日低点反弹 {_fmt_pct(row.get('rebound_from_low_10'))}，"
+      f"修复分数 {_fmt_num(row.get('repair_score'))}，策略分数 {_fmt_num(row.get('strategy_score'))}。"
+    )
   if variant == "entropy_hold_judgement":
     if bool(row.get("strategy_state")):
       return (
@@ -2977,6 +2998,13 @@ def _selected_advice_text(row: dict[str, Any], strategy: dict[str, Any], values:
     staged_entry_days = _text_or_dash(row.get("staged_entry_days"))
     staged_text = f"，预计分 {staged_entry_days} 天完成建仓" if staged_entry_days != "-" and str(row.get("entry_mode") or "") == "staged" else ""
     return base + f" 当前建议 {entry_mode}，计划仓位 {position_scale}{staged_text}；若突破动能回落，或重新跌回 20 日线下方，可提前止盈/止损。"
+  if variant == "continuous_decline_recovery":
+    state_label = _market_buy_state_label(row.get("market_buy_state"))
+    entry_mode = _entry_mode_label(row.get("entry_mode"))
+    position_scale = _fmt_pct(row.get("position_scale"))
+    if str(row.get("entry_mode") or "") == "skip":
+      return f"当前市场处于 {state_label}，更适合等待下一轮修复确认，而不是继续追这只股票。"
+    return base + f" 当前市场处于 {state_label}，建议 {entry_mode}，计划仓位 {position_scale}；若 2 个交易日内不能继续放量走强，或重新跌回 5 日线下方，应优先减仓。"
   if variant == "entropy_hold_judgement":
     if bool(row.get("strategy_state")):
       return base + " 当前可继续持有；只有当高熵乱序连续积累且动力记忆持续坍缩时，再考虑退出。"
@@ -3096,6 +3124,61 @@ def _entropy_bifurcation_focus_payload(
   }
 
 
+def _continuous_decline_recovery_focus_payload(
+  summary: dict[str, Any],
+  selected_rows: list[dict[str, Any]],
+  candidate_rows: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+  if not summary and not selected_rows and not candidate_rows:
+    return None
+
+  lead_row = dict(selected_rows[0]) if selected_rows else (dict(candidate_rows[0]) if candidate_rows else {})
+  state_label = _market_buy_state_label(summary.get("market_buy_state") or lead_row.get("market_buy_state"))
+  lead_name = _text_or_dash(lead_row.get("name") or lead_row.get("symbol"))
+  lead_title = lead_name
+  lead_symbol = _text_or_dash(lead_row.get("symbol"))
+  if lead_symbol != "-" and lead_symbol != lead_title:
+    lead_title = f"{lead_title} ({lead_symbol})"
+
+  lead_payload = None
+  if lead_row:
+    lead_payload = {
+      "title": lead_title,
+      "subtitle": " / ".join(part for part in [_text_or_dash(lead_row.get("industry")), state_label] if part != "-"),
+      "items": [
+        {"label": "市场状态", "value": state_label},
+        {"label": "板块排名", "value": _text_or_dash(lead_row.get("sector_rank"))},
+        {"label": "策略分数", "value": _fmt_num(lead_row.get("strategy_score"))},
+        {"label": "修复分数", "value": _fmt_num(lead_row.get("repair_score"))},
+        {"label": "建仓方式", "value": _entry_mode_label(lead_row.get("entry_mode"))},
+        {"label": "计划仓位", "value": _fmt_pct(lead_row.get("position_scale"))},
+        {"label": "执行状态", "value": _execution_state_label(lead_row.get("execution_cost_state"))},
+      ],
+    }
+
+  return {
+    "strategy": "continuous_decline_recovery",
+    "title": "连续下跌修复画像",
+    "subtitle": "市场买点 + 板块领先 + 个股修复窗口",
+    "phase_label": state_label,
+    "summary": (
+      f"当前市场处于 {state_label}，买点评分 {_fmt_num(summary.get('market_buy_score'))}，"
+      f"最近洗盘峰值 {_fmt_num(summary.get('recent_washout_peak'))}，"
+      f"候选 {len(candidate_rows)} 只，最终入选 {len(selected_rows)} 只，"
+      f"领先行业 {summary.get('top_sector') or '-'}。"
+    ),
+    "cards": [
+      {"label": "市场买点", "value": state_label, "detail": f"买点评分 {_fmt_num(summary.get('market_buy_score'))}"},
+      {"label": "洗盘强度", "value": _fmt_num(summary.get('market_washout_score')), "detail": f"最近峰值 {_fmt_num(summary.get('recent_washout_peak'))}"},
+      {"label": "修复强度", "value": _fmt_num(summary.get('market_repair_score')), "detail": f"候选 {len(candidate_rows)} 只"},
+      {"label": "过热程度", "value": _fmt_num(summary.get('market_overheat_score')), "detail": f"入选 {len(selected_rows)} 只"},
+      {"label": "领先行业", "value": _text_or_dash(summary.get('top_sector')), "detail": f"行业分数 {_fmt_num(summary.get('top_sector_score'))}"},
+      {"label": "平均得分", "value": _fmt_num(summary.get('avg_selected_score')), "detail": f"候选均分 {_fmt_num(summary.get('avg_candidate_score'))}"},
+    ],
+    "lead": lead_payload,
+  }
+
+
 def _strategy_focus_payload(
   strategy: dict[str, Any],
   summary: dict[str, Any],
@@ -3104,6 +3187,8 @@ def _strategy_focus_payload(
 ) -> dict[str, Any] | None:
   if strategy.get("base_id") == "entropy_bifurcation_setup":
     return _entropy_bifurcation_focus_payload(summary, selected_rows, candidate_rows)
+  if strategy.get("base_id") == "continuous_decline_recovery":
+    return _continuous_decline_recovery_focus_payload(summary, selected_rows, candidate_rows)
   return None
 
 

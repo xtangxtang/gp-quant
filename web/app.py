@@ -2533,61 +2533,74 @@ def _strategy_variants(parameters: list[dict[str, Any]]) -> list[str]:
     return []
 
 
+def _entrypoint_sort_key(path: Path) -> tuple[int, str]:
+  name = path.name
+  if name.endswith("_scan.py"):
+    return (0, name)
+  if "diagnostics" not in name:
+    return (1, name)
+  return (2, name)
+
+
 def _discover_strategies() -> list[dict[str, Any]]:
-    strategies: list[dict[str, Any]] = []
-    if not STRATEGY_ROOT.exists():
-        return strategies
+  strategies: list[dict[str, Any]] = []
+  if not STRATEGY_ROOT.exists():
+    return strategies
 
-    for strategy_dir in sorted(path for path in STRATEGY_ROOT.iterdir() if path.is_dir()):
-        readme_path = strategy_dir / "README.md"
-        if not readme_path.exists():
-            continue
-        relative_path = strategy_dir.relative_to(REPO_ROOT)
-        entrypoints = sorted(strategy_dir.glob("run_*.py"))
-        if not entrypoints:
-            continue
-        strategy_id = str(strategy_dir.relative_to(STRATEGY_ROOT)).replace("/", "-")
-        readme = _extract_readme_metadata(readme_path)
-        parameter_help = _parse_readme_parameter_help(readme["parameter_text"])
-        parameters = _parameter_definitions(entrypoints[0], strategy_id, parameter_help)
-        variants = _strategy_variants(parameters)
-        if variants:
-            visible_parameters = [param for param in parameters if param.get("dest") != "strategy_name"]
-            for variant in variants:
-                variant_id = f"{strategy_id}--{variant}"
-                strategies.append(
-                    {
-                        "id": variant_id,
-                        "base_id": strategy_id,
-                        "display_name": f"{strategy_dir.name} / {_variant_label(variant)}",
-                        "relative_path": f"{relative_path}#{variant}",
-                        "directory": strategy_dir,
-                        "readme_path": readme_path,
-                        "entrypoint_path": entrypoints[0],
-                        "readme": _with_variant_readme(readme, variant),
-                        "parameters": visible_parameters,
-                        "command_parameters": parameters,
-                        "fixed_values": {"strategy_name": variant},
-                    }
-                )
-            continue
+  for strategy_dir in sorted(path for path in STRATEGY_ROOT.iterdir() if path.is_dir()):
+    readme_path = strategy_dir / "README.md"
+    if not readme_path.exists():
+      continue
 
+    relative_path = strategy_dir.relative_to(REPO_ROOT)
+    entrypoints = sorted(strategy_dir.glob("run_*.py"), key=_entrypoint_sort_key)
+    if not entrypoints:
+      continue
+
+    strategy_id = str(strategy_dir.relative_to(STRATEGY_ROOT)).replace("/", "-")
+    readme = _extract_readme_metadata(readme_path)
+    parameter_help = _parse_readme_parameter_help(readme["parameter_text"])
+    parameters = _parameter_definitions(entrypoints[0], strategy_id, parameter_help)
+    variants = _strategy_variants(parameters)
+
+    if variants:
+      visible_parameters = [param for param in parameters if param.get("dest") != "strategy_name"]
+      for variant in variants:
+        variant_id = f"{strategy_id}--{variant}"
         strategies.append(
           {
-            "id": strategy_id,
+            "id": variant_id,
             "base_id": strategy_id,
-            "display_name": _strategy_label(strategy_id, strategy_dir.name),
-            "relative_path": str(relative_path),
+            "display_name": f"{strategy_dir.name} / {_variant_label(variant)}",
+            "relative_path": f"{relative_path}#{variant}",
             "directory": strategy_dir,
             "readme_path": readme_path,
             "entrypoint_path": entrypoints[0],
-            "readme": {**readme, "tagline": _strategy_tagline(strategy_id, readme.get("tagline", ""))},
-            "parameters": parameters,
+            "readme": _with_variant_readme(readme, variant),
+            "parameters": visible_parameters,
             "command_parameters": parameters,
-            "fixed_values": {},
+            "fixed_values": {"strategy_name": variant},
           }
         )
-    return strategies
+      continue
+
+    strategies.append(
+      {
+        "id": strategy_id,
+        "base_id": strategy_id,
+        "display_name": _strategy_label(strategy_id, strategy_dir.name),
+        "relative_path": str(relative_path),
+        "directory": strategy_dir,
+        "readme_path": readme_path,
+        "entrypoint_path": entrypoints[0],
+        "readme": {**readme, "tagline": _strategy_tagline(strategy_id, readme.get("tagline", ""))},
+        "parameters": parameters,
+        "command_parameters": parameters,
+        "fixed_values": {},
+      }
+    )
+
+  return strategies
 
 
 def _strategy_index() -> dict[str, dict[str, Any]]:

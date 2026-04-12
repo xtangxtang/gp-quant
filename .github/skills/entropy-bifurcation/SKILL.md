@@ -63,16 +63,79 @@ cd /nvme5/xtang/gp-workspace/gp-quant
 
 参数与多时间框架一致（`--top-n`, `--min-amount`, `--min-turnover`, `--hold-days` 等）。
 
-### 2. 查看结果
+### 2. 专用回测（默认最近 120 天）
+
+```bash
+./scripts/run_entropy_bifurcation_backtest.sh
+
+# 自定义回测区间
+./scripts/run_entropy_bifurcation_backtest.sh \
+  --backtest-start-date 20260101 \
+  --backtest-end-date 20260331
+```
+
+### 3. 复杂性子策略变体
+
+4 个基于不同复杂性理论侧面的选股变体，共享熵分岔基础设施：
+
+```bash
+# 压缩突破（低波动压缩 → 放量突破）
+./scripts/run_complexity_compression_breakout.sh --scan-date 20260310
+
+# 分形回调（趋势中的分形级别回调买点）
+./scripts/run_complexity_fractal_pullback.sh --scan-date 20260310
+
+# 市场能量流（资金流向 + 熵变化）
+./scripts/run_complexity_market_energy_flow.sh --scan-date 20260310
+
+# 自组织趋势（自组织临界态 → 趋势启动）
+./scripts/run_complexity_self_organized_trend.sh --scan-date 20260310
+```
+
+输出到 `results/entropy_bifurcation_setup/<策略名>/`。
+
+### 4. 四层熵交易系统（分钟级）
+
+分钟级完整 4 层交易系统，独立于日线扫描：
+
+```bash
+# 并行全市场扫描（16 进程）
+./scripts/batch_scan.sh [总股票数] [并发数]
+
+# 单独运行
+python -m src.strategy.four_layer_entropy_system.run_scan \
+  --data_dir /nvme5/xtang/gp-workspace/gp-data/trade \
+  --basic_path /nvme5/xtang/gp-workspace/gp-data/tushare_stock_basic.csv
+```
+
+输出到 `results/four_layer_system/`：`stock_decisions.csv` + `buy_signals.csv`。
+
+**注意**: 分钟级熵因子已证明预测力不足（35% 胜率），此系统为实验性质，见 `wiki/experiments/entropy-backtest-minute.md`。
+
+### 5. 查看结果
 
 输出到 `results/entropy_bifurcation_setup/`。
 
-### 3. 解读增强因子
+### 6. 解读增强因子
 
 - `path_irreversibility_20` 高 → 资金流有方向性，非随机波动
 - `dominant_eig_20` 接近 -1 → 分岔前兆信号
 - `market_coupling_entropy_20` 低 → 市场处于高度同步态，风险上升
 - `strategic_abandonment = True` → 建议跳过该股
+
+## 相关策略代码
+
+| 目录 | 说明 |
+|------|------|
+| `src/strategy/entropy_bifurcation_setup/` | 日线 4 层扫描（主力） |
+| `src/strategy/four_layer_entropy_system/` | 分钟级 4 层系统（实验） |
+| `src/core/tick_entropy.py` | 底层熵计算模块 |
+
+## Wiki 参考
+
+- `wiki/entities/four-layer-system.md` — 系统架构详解
+- `wiki/concepts/entropy.md` — 熵的理论基础
+- `wiki/sources/12-papers-synthesis.md` — 8 个核心共识
 
 ## 理论基础
 

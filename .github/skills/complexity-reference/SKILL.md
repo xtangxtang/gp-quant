@@ -17,6 +17,18 @@ argument-hint: "搜索的概念，例如：熵、分岔前兆、Hurst 指数"
 
 ## 参考文档
 
+### 0. Wiki 知识库（推荐首选）
+
+```
+wiki/index.md                          # 总索引，按类别检索
+wiki/concepts/                         # 9 个概念页（熵、分岔、分形等）
+wiki/sources/12-papers-synthesis.md    # 12 篇论文综合（8 共识 + 6 警告）
+wiki/entities/tick-entropy-module.md   # 核心熵计算模块
+wiki/decisions/                        # 架构决策记录
+```
+
+Wiki 是项目知识的**编译产物**，交叉引用完整，优先查 Wiki 再查原始文档。
+
 ### 1. 复杂性理论笔记
 
 ```

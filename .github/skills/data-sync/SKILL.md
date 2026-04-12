@@ -40,12 +40,22 @@ gp-data/
 首次使用时，一次性下载全部数据：
 
 ```bash
+# 方法 A：分步下载（股票列表 → 日线 → 扩展数据）
 ./scripts/run_get_tushare_all.sh \
+  -o /nvme5/xtang/gp-workspace/gp-data \
+  --token <tushare_token>
+
+# 方法 B：一次性全部下载（Tushare 2000 积分可用的全部数据）
+./scripts/run_download_all_tushare.sh \
   -o /nvme5/xtang/gp-workspace/gp-data \
   --token <tushare_token>
 ```
 
-步骤：(1) 获取股票列表 → (2) 下载全部日线历史 → (3) 下载扩展数据
+方法 B 支持额外参数：
+- `--threads N` — 并发线程数（默认 4）
+- `--rate N` — API 调用频率（默认 180/min）
+- `--category <all|daily|financial|...>` — 只下载特定类别
+- `--start-date / --end-date` — 指定日期范围
 
 ### 方式二：每日自动调度
 

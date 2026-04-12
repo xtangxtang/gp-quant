@@ -1,0 +1,1 @@
+- [entropy_backtest_results.md](entropy_backtest_results.md) — 2025 年 4 月 -12 月熵因子回测结果（240 分钟窗口，临界转变预警退出）

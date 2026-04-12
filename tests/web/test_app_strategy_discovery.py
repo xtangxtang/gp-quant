@@ -35,6 +35,17 @@ class WebStrategyDiscoveryTests(unittest.TestCase):
         self.assertEqual(response.get_json()["entrypoint_name"], "run_continuous_decline_recovery_scan.py")
         self.assertEqual(captured["entrypoint_name"], "run_continuous_decline_recovery_scan.py")
 
+    def test_strategies_route_supports_package_relative_imports(self) -> None:
+        app = web_app.create_app()
+
+        response = app.test_client().get("/api/strategies")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertIsInstance(payload, dict)
+        strategy_ids = {item["id"] for item in payload["strategies"]}
+        self.assertIn("four_layer_entropy_system", strategy_ids)
+
 
 if __name__ == "__main__":
     unittest.main()

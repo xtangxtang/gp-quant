@@ -1,5 +1,5 @@
 import argparse
-import importlib.util
+import importlib
 import re
 import subprocess
 import sys
@@ -2417,16 +2417,16 @@ def _with_variant_readme(readme: dict[str, Any], variant_name: str) -> dict[str,
     }
 
 
+def _strategy_module_name(module_path: Path) -> str:
+    relative_path = module_path.resolve().relative_to(REPO_ROOT.resolve())
+    return ".".join(relative_path.with_suffix("").parts)
+
+
 def _import_strategy_module(module_path: Path, strategy_id: str):
-    module_name = f"gp_quant_strategy_{strategy_id.replace('-', '_').replace('/', '_')}"
-    if str(REPO_ROOT) not in sys.path:
-        sys.path.insert(0, str(REPO_ROOT))
-    spec = importlib.util.spec_from_file_location(module_name, module_path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"Unable to load strategy module from {module_path}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+  if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+  importlib.invalidate_caches()
+  return importlib.import_module(_strategy_module_name(module_path))
 
 
 def _infer_kind(action: argparse.Action) -> str:

@@ -12,6 +12,88 @@
 
 一句话概括，这个策略不是买在最恐慌的时候，而是买在“连续下跌后的第一段可持续修复”里。
 
+## 四层熵系统状态流转与决策合成图
+
+下面这张图描述的是 `four_layer_entropy_system` 的实际代码路径，放在这里作为和当前三层修复策略对照阅读的参考。
+
+```mermaid
+flowchart TD
+  Data[加载分钟数据并构造 prices volumes returns] --> GateMetrics
+
+  subgraph MarketGate[Layer 1 市场门控]
+    GateMetrics[计算 coupling_entropy 与 noise_cost]
+    GateMetrics --> GateState{市场相位状态}
+    GateState -->|compression| GateCompression[gate_score 高]
+    GateState -->|transition 或 neutral| GateNormal[gate_score 中等]
+    GateState -->|expansion| GateTight[gate_score 偏低]
+    GateState -->|distorted 或 abandon| GateClosed[abandonment_flag = true]
+  end
+
+  GateCompression --> StockFeatures
+  GateNormal --> StockFeatures
+  GateTight --> StockFeatures
+  GateClosed --> StockFeatures
+
+  subgraph StockState[Layer 2 个股状态]
+    StockFeatures[计算 path_irreversibility dominant_eigenvalue permutation_entropy phase_adjusted_ar1]
+    StockFeatures --> StateJudge{determine_state}
+    StateJudge --> Compression[compression]
+    StateJudge --> Critical[critical_slowing]
+    StateJudge --> Bifurcation[bifurcation]
+    StateJudge --> Diffusion[diffusion]
+    StateJudge --> Exhaustion[exhaustion]
+    StateJudge --> Observation[observation]
+
+    Compression --> BuyCompression[buy 当 total_score > 0.45 且 gate_open]
+    Critical --> BuyCritical[buy 当 total_score > 0.50 且 gate_open]
+    Bifurcation --> HoldSignal[hold 当 total_score > 0.40 且 gate_open]
+    Diffusion --> SellSignal[sell]
+    Exhaustion --> SellSignal
+    Observation --> WaitSignal[wait]
+  end
+
+  BuyCompression --> ExecEval
+  BuyCritical --> ExecEval
+  HoldSignal --> ExecEval
+  SellSignal --> ExecEval
+  WaitSignal --> ExecEval
+
+  subgraph ExecutionCost[Layer 3 执行成本]
+    ExecEval[计算 abandonment_score 与交易成本]
+    ExecEval --> EntryMode{determine_entry_mode}
+    EntryMode -->|skip| SkipMode[entry_mode = skip]
+    EntryMode -->|probe| ProbeMode[position_scale = 0.25]
+    EntryMode -->|staged| StagedMode[position_scale = 0.50]
+    EntryMode -->|full| FullMode[position_scale = 0.80]
+    ExecEval --> ExitMode[determine_exit_mode]
+  end
+
+  ExecEval -.-> Experimental
+
+  subgraph ExperimentalLayer[Layer 4 实验层]
+    Experimental[tda reservoir structure_latent]
+    Experimental --> ExperimentalNote[experimental_score 不参与主决策]
+  end
+
+  GateClosed --> FinalWait[final action = wait]
+  SkipMode --> FinalWait
+  WaitSignal --> FinalWait
+  SellSignal --> FinalSell[final action = sell]
+  HoldSignal --> FinalHold[final action = hold]
+  ProbeMode --> FinalBuy[final action = buy]
+  StagedMode --> FinalBuy
+  FullMode --> FinalBuy
+
+  subgraph DecisionFusion[决策合成]
+    Confidence[confidence = 0.70 * state_score + 0.20 * gate_score + 0.10 * position_scale]
+  end
+
+  FinalWait --> Confidence
+  FinalSell --> Confidence
+  FinalHold --> Confidence
+  FinalBuy --> Confidence
+```
+
 ## 12 篇论文指标映射表
 
 | 论文 | 市场层 | 板块层 | 个股层 | 本策略中的落地指标 |

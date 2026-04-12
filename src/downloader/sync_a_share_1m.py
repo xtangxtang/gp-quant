@@ -246,11 +246,8 @@ def _retry_threads(initial_threads: int, round_index: int) -> int:
 
 
 def _round_primary_source(base_source: str, round_index: int) -> str:
-    source = str(base_source or "em").strip().lower()
-    if source not in {"em", "tx"}:
-        return source
-    pair = [source, "tx" if source == "em" else "em"]
-    return pair[int(round_index) % 2]
+    source = str(base_source or "ts").strip().lower()
+    return source
 
 
 def _run_retry_rounds(
@@ -326,7 +323,7 @@ def main() -> None:
     parser.add_argument("--end_date", default="", help="End date, YYYYMMDD or YYYY-MM-DD")
     parser.add_argument("--recent_open_days", type=int, default=3, help="When start/end are omitted, sync the latest N open days")
     parser.add_argument("--fqt", default="0", help="Adjustment mode: 0/raw, 1/qfq, 2/hfq")
-    parser.add_argument("--source", choices=["em", "tx", "ts"], default="em", help="Primary minute source")
+    parser.add_argument("--source", choices=["em", "tx", "ts"], default="ts", help="Primary minute source")
     parser.add_argument("--token", default="", help="Optional Tushare token, used when --source ts")
     parser.add_argument("--force", action="store_true", help="Re-download even when a day file already looks complete")
     parser.add_argument(

@@ -322,15 +322,13 @@ def minute_source() -> str:
     """
 
     s = (os.getenv("GP_MINUTE_SOURCE", "") or "").strip().lower()
-    if not s or s in {"em", "eastmoney"}:
-        return "em"
-    if s in {"ts", "tushare"}:
+    if s in {"ts", "tushare"} or not s:
         return "ts"
     if s in {"em", "eastmoney"}:
         return "em"
     if s in {"tx", "tencent"}:
         return "tx"
-    return "em"
+    return "ts"
 
 
 def _has_tushare_token() -> bool:
@@ -643,15 +641,11 @@ def fetch_1m(symbol: str, date_yyyy_mm_dd: str, fqt: int | str = 1) -> tuple[pd.
     """
 
     primary = minute_source()
-    candidates = ["ts", "tx", "em"]
-    if not _has_tushare_token() and "ts" in candidates:
-        candidates = [x for x in candidates if x != "ts"]
-        if primary == "ts":
-            primary = "em"
-    if _tushare_minute_disabled() and "ts" in candidates:
-        candidates = [x for x in candidates if x != "ts"]
-        if primary == "ts":
-            primary = "em" if "em" in candidates else candidates[0]
+    candidates = ["ts"]
+    if not _has_tushare_token():
+        raise RuntimeError("Tushare token required for minute data. Set TUSHARE_TOKEN env or pass --token.")
+    if _tushare_minute_disabled():
+        raise RuntimeError("Tushare minute data source has been disabled due to rate-limit/permission issues.")
     order = [primary] + [x for x in candidates if x != primary]
 
     first_err: Exception | None = None

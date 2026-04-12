@@ -23,10 +23,10 @@ updated: 2026-04-12
 
 ## 核心架构
 
-### 数据层 (`src/downloader/`)
+### 数据层 (`src/downloader/` + `src/agents/`)
 - **Tushare**: 日线 K 线、财务数据、除权因子、交易日历
-- **Eastmoney / Tencent**: 分钟级交易数据增量同步
-- **定时调度**: 每日 16:00 自动更新 (`eod_data_scheduler.py`)
+- **Tencent**: 分钟级交易数据增量同步
+- **[Agent 调度系统](entities/agent-system.md)**: 5 个数据 Agent + Supervisor 统一调度、重试、监控
 
 ### 策略层 (`src/strategy/`)
 1. **[multitimeframe-scanner](entities/multitimeframe-scanner.md)** — 主力策略：日/周/月多时间框架共振扫描
@@ -61,9 +61,13 @@ updated: 2026-04-12
 
 ```
 /nvme5/xtang/gp-workspace/gp-data/
-├── tushare-daily-full/       # 日线 K 线（每股一文件）
-├── trade/<symbol>/           # 分钟级交易数据
+├── tushare-daily-full/       # 日线 K 线（每股一文件，~5500 只）
+├── tushare-weekly-5d/        # 5 日周线 K 线（衍生数据）
+├── trade/<symbol>/           # 分钟级交易数据 (~1350 万文件)
+├── tushare-moneyflow/        # 资金流向
+├── tushare-adj_factor/       # 复权因子
+├── tushare-fina_indicator/   # 财务指标
 ├── tushare_stock_basic.csv   # 股票基本信息
-├── trade_cal.csv             # 交易日历
-└── *.csv                     # 财务数据等
+├── .agent_*_state.json       # Agent 状态文件
+└── .agent_alerts.log         # 告警日志
 ```

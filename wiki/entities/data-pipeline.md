@@ -1,6 +1,6 @@
 ---
 title: 数据管道
-tags: [data, pipeline, tushare, eastmoney]
+tags: [data, pipeline, tushare]
 confidence: high
 status: active
 created: 2026-04-12
@@ -16,7 +16,6 @@ updated: 2026-04-12
 | 源 | 数据类型 | 频率 |
 |----|----------|------|
 | Tushare | 日线 K 线、财务数据、除权因子、交易日历 | 日 |
-| Eastmoney | 分钟级交易数据 | 实时增量 |
 | Tencent | 分钟级交易数据（备用） | 实时增量 |
 
 ## 核心模块
@@ -31,8 +30,6 @@ updated: 2026-04-12
 | `sync_a_share_1m.py` | 分钟级增量同步 |
 | `eod_data_scheduler.py` | 自动 16:00 定时更新 |
 | `tushare_provider.py` | Tushare API 封装 |
-| `daily_kline_provider.py` | 日线 K 线聚合 |
-| `eastmoney_universe.py` | Eastmoney 数据源 |
 | `csv_utils.py` | CSV 读写工具 |
 
 ## 数据存储
@@ -52,7 +49,24 @@ updated: 2026-04-12
 └── dividend.csv              # 分红数据
 ```
 
-## 运行脚本
+## 运行方式
+
+### Agent 调度（推荐）
+
+通过 [Agent 调度系统](agent-system.md) 统一管理：
+
+```bash
+# 状态看板
+./scripts/run_agent_supervisor.sh status
+
+# 每日增量同步
+./scripts/run_agent_supervisor.sh run
+
+# 守护进程模式
+./scripts/run_agent_supervisor.sh daemon
+```
+
+### 单独运行脚本
 
 | 脚本 | 用途 |
 |------|------|
@@ -64,6 +78,7 @@ updated: 2026-04-12
 
 ## 相关实体
 
+- [agent-system](agent-system.md) — Agent 调度系统（统一管理下载任务）
 - [multitimeframe-scanner](multitimeframe-scanner.md) — 消费日线数据
 - [four-layer-system](four-layer-system.md) — 消费日线数据
 - [web-dashboard](web-dashboard.md) — 展示数据

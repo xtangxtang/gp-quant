@@ -42,7 +42,7 @@ show_help() {
   echo "  -h, --help                      显示帮助"
   echo ""
   echo "说明:"
-  echo "  免费 Eastmoney/Tencent 分钟接口通常只能覆盖最近几个交易日。"
+  echo "   免费 Tencent 分钟接口通常只能覆盖最近几个交易日。"
   echo ""
   echo "示例:"
   echo "  $0 -o /nvme5/xtang/gp-workspace/gp-data"

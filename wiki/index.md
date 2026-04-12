@@ -32,7 +32,8 @@
 | [tick-entropy-module](entities/tick-entropy-module.md) | 核心熵计算模块（5 个熵指标 + 状态分类器） | `src/core/tick_entropy.py` |
 | [four-layer-system](entities/four-layer-system.md) | 四层选股系统（市场门 → 股票状态 → 执行成本 → 实验层） | `src/strategy/entropy_bifurcation_setup/` |
 | [multitimeframe-scanner](entities/multitimeframe-scanner.md) | 多时间框架共振扫描器 | `src/strategy/multitimeframe/` |
-| [data-pipeline](entities/data-pipeline.md) | 数据管道：Tushare/Eastmoney/Tencent 数据同步 | `src/downloader/` |
+| [data-pipeline](entities/data-pipeline.md) | 数据管道：Tushare/Tencent 数据同步 | `src/downloader/` |
+| [agent-system](entities/agent-system.md) | Agent 调度系统：5 个数据 Agent + Supervisor | `src/agents/` |
 | [continuous-decline-recovery](entities/continuous-decline-recovery.md) | 连续下跌恢复买入策略 | `src/strategy/continuous_decline_recovery/` |
 | [hold-exit-system](entities/hold-exit-system.md) | 持有/退出决策系统（熵储备 + 快速膨胀 + 衰竭退出） | `src/strategy/uptrend_hold_state_flow/` |
 | [web-dashboard](entities/web-dashboard.md) | Web 可视化面板 | `web/` |
@@ -65,4 +66,4 @@
 
 ---
 
-*最后更新: 2026-04-12 — 初始化 Wiki 结构*
+*最后更新: 2026-04-12 — 新增 Agent 调度系统*

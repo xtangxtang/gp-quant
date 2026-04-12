@@ -4,20 +4,8 @@ import random
 import threading
 import _thread
 import time
-from datetime import datetime, timedelta
-
 import pandas as pd
 import requests
-
-try:
-    from daily_kline_provider import fetch_daily_kline_lines
-except Exception:
-    fetch_daily_kline_lines = None
-
-try:
-    from eastmoney_universe import fetch_float_shares_eastmoney
-except Exception:
-    fetch_float_shares_eastmoney = None
 
 try:
     from tushare_provider import fetch_ts_float_share_map
@@ -63,16 +51,24 @@ def _warn_missing_dependency(name: str, reason: str) -> None:
     print(f"[WARN] Optional dependency {name} unavailable: {reason}")
 
 
-_EM_MAX_INFLIGHT = max(1, int(os.getenv("GP_EM_MAX_INFLIGHT", "4") or "4"))
-_EM_HTTP_SEM = threading.BoundedSemaphore(_EM_MAX_INFLIGHT)
+_HTTP_MAX_INFLIGHT = max(1, int(os.getenv("GP_HTTP_MAX_INFLIGHT", "4") or "4"))
+_HTTP_SEM = threading.BoundedSemaphore(_HTTP_MAX_INFLIGHT)
+
+_DEFAULT_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+    ),
+    "Accept": "application/json,text/plain,*/*",
+}
 
 
 def _http_get_json(url: str, params: dict, timeout: int = 20, retries: int = 3, headers: dict | None = None) -> dict:
     last_err: Exception | None = None
     for i in range(max(1, int(retries))):
         try:
-            with _EM_HTTP_SEM:
-                r = _get_http_session().get(url, params=params, headers=headers or _em_headers(), timeout=timeout)
+            with _HTTP_SEM:
+                r = _get_http_session().get(url, params=params, headers=headers or _DEFAULT_HEADERS, timeout=timeout)
                 r.raise_for_status()
                 return r.json()
         except requests.exceptions.ProxyError as e:
@@ -153,19 +149,7 @@ def _get_float_shares_cached(symbol: str) -> float | None:
     with _FLOAT_SHARES_LOCK:
         if symbol in _FLOAT_SHARES_CACHE:
             return _FLOAT_SHARES_CACHE[symbol]
-
-    try:
-        if fetch_float_shares_eastmoney is None:
-            _warn_missing_dependency("eastmoney_universe", "turnover rate will be left empty")
-            v = None
-        else:
-            v = fetch_float_shares_eastmoney(symbol)
-    except Exception:
-        v = None
-
-    with _FLOAT_SHARES_LOCK:
-        _FLOAT_SHARES_CACHE[symbol] = v
-    return v
+    return None
 
 
 def _get_tushare_float_share_map_cached(date_yyyy_mm_dd: str) -> dict[str, float]:
@@ -243,28 +227,10 @@ def divide_chunks(items: list, chunk_size: int):
         yield items[i : i + chunk_size]
 
 
-def _symbol_to_em_secid(symbol: str) -> str:
-    s = symbol.strip().lower()
-    if s.startswith("sh"):
-        return f"1.{s[2:]}"
-    if s.startswith("sz"):
-        return f"0.{s[2:]}"
-    if s.startswith("bj"):
-        # Beijing exchange symbols map to market_code=0 on Eastmoney push2his
-        return f"0.{s[2:]}"
-    # Fallback: infer from first digit (6/9 for SH; others SZ)
-    # Note: 92xxxx are Beijing codes on Eastmoney (market_code=0)
-    if s.startswith("92"):
-        market_code = 0
-    else:
-        market_code = 1 if s.startswith(("6", "9")) else 0
-    return f"{market_code}.{s}"
-
-
 def _normalize_em_fqt(fqt: int | str) -> str:
-    """Normalize fqt to Eastmoney expected string.
+    """Normalize fqt string.
 
-    Eastmoney kline/get uses:
+    Values:
     - 0: no adjustment
     - 1: forward adjustment (前复权)
     - 2: backward adjustment (后复权)
@@ -282,20 +248,9 @@ def _normalize_em_fqt(fqt: int | str) -> str:
     raise ValueError(f"Unknown fqt/adj mode: {fqt}")
 
 
-def _em_headers() -> dict:
-    return {
-        "User-Agent": (
-            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-            "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-        ),
-        "Referer": "https://quote.eastmoney.com/",
-        "Accept": "application/json,text/plain,*/*",
-    }
-
-
 def _tx_headers() -> dict:
     return {
-        "User-Agent": _em_headers()["User-Agent"],
+        "User-Agent": _DEFAULT_HEADERS["User-Agent"],
         "Referer": "https://gu.qq.com/",
         "Accept": "application/json,text/plain,*/*",
     }
@@ -317,15 +272,12 @@ def minute_source() -> str:
 
     Controlled by env var GP_MINUTE_SOURCE:
       - ts/tushare
-      - em/eastmoney
       - tx/tencent
     """
 
     s = (os.getenv("GP_MINUTE_SOURCE", "") or "").strip().lower()
     if s in {"ts", "tushare"} or not s:
         return "ts"
-    if s in {"em", "eastmoney"}:
-        return "em"
     if s in {"tx", "tencent"}:
         return "tx"
     return "ts"
@@ -337,171 +289,6 @@ def _has_tushare_token() -> bool:
         return True
     token = (os.getenv("GP_TUSHARE_TOKEN", "") or "").strip()
     return bool(token)
-
-
-def _fetch_em_trends2(symbol: str, ndays: int = 5) -> dict:
-    """Fetch recent minute trends via Eastmoney trends2/get.
-
-    Note: This endpoint appears to support only the most recent ~5 trading days.
-    """
-
-    url = "https://push2his.eastmoney.com/api/qt/stock/trends2/get"
-    params = {
-        "secid": _symbol_to_em_secid(symbol),
-        "ut": "7eea3edcaed734bea9cbfc24409ed989",
-        "fields1": "f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13",
-        "fields2": "f51,f52,f53,f54,f55,f56,f57,f58",
-        "ndays": str(ndays),
-        "iscr": "0",
-        "iscca": "0",
-    }
-    j = _http_get_json(url, params=params, timeout=30, retries=6)
-    data = j.get("data") or {}
-    return data
-
-
-def _fetch_em_daily_klines(symbol: str, beg_yyyymmdd: str, end_yyyymmdd: str, fqt: str) -> list[str]:
-    # Centralized provider supports em/tx and outputs a canonical schema.
-    if fetch_daily_kline_lines is None:
-        _warn_missing_dependency("daily_kline_provider", "minute qfq/hfq adjustment will fall back to raw prices")
-        return []
-    return fetch_daily_kline_lines(symbol, beg_yyyymmdd, end_yyyymmdd, fqt)
-
-
-def _daily_close_and_prev_close(symbol: str, date_yyyy_mm_dd: str, fqt: str) -> tuple[float | None, float | None]:
-    """Return (close_today, close_prev_trading_day) for the given fqt series."""
-
-    target_dt = datetime.strptime(date_yyyy_mm_dd, "%Y-%m-%d")
-    beg = (target_dt - timedelta(days=90)).strftime("%Y%m%d")
-    end = target_dt.strftime("%Y%m%d")
-    klines = _fetch_em_daily_klines(symbol, beg, end, fqt)
-    if not klines:
-        return None, None
-
-    # Each kline: YYYY-MM-DD,open,close,high,low,volume,amount,...
-    dates: list[str] = []
-    closes: list[float] = []
-    for item in klines:
-        parts = item.split(",")
-        if len(parts) < 3:
-            continue
-        d = parts[0]
-        try:
-            c = float(parts[2])
-        except Exception:
-            continue
-        dates.append(d)
-        closes.append(c)
-
-    if not dates:
-        return None, None
-
-    try:
-        idx = dates.index(date_yyyy_mm_dd)
-    except ValueError:
-        return None, None
-
-    close_today = closes[idx]
-    close_prev = closes[idx - 1] if idx - 1 >= 0 else None
-    return close_today, close_prev
-
-
-def fetch_em_1m(symbol: str, date_yyyy_mm_dd: str, fqt: int | str = 1) -> pd.DataFrame:
-    """Fetch 1-minute bars for a single trading day (Eastmoney-like columns).
-
-    Output columns match Eastmoney minute-bar semantics (from `trends2/get`):
-    - 时间 (YYYY-MM-DD HH:MM)
-    - 开盘
-    - 收盘
-    - 最高
-    - 最低
-    - 成交量(手)
-    - 成交额(元)
-    - 均价
-
-    Notes:
-    - Minute history is only available for the most recent ~5 trading days.
-      If the requested date is outside that window, raises UnsupportedMinuteHistoryError.
-    - `--adj qfq/hfq` is applied via a daily adjustment factor
-      (daily_close_adj / daily_close_raw) for the requested date.
-    """
-
-    fqt_str = _normalize_em_fqt(fqt)
-    data = _fetch_em_trends2(symbol, ndays=5)
-    trends = data.get("trends") or []
-    if not trends:
-        return pd.DataFrame(columns=["时间", "开盘", "收盘", "最高", "最低", "成交量(手)", "成交额(元)", "均价"])
-
-    available_dates = sorted({str(line).split(" ", 1)[0] for line in trends if isinstance(line, str)})
-    if date_yyyy_mm_dd not in available_dates:
-        if available_dates:
-            raise UnsupportedMinuteHistoryError(
-                f"Minute history only available for recent days ({available_dates[0]} ~ {available_dates[-1]}). "
-                f"Requested={date_yyyy_mm_dd}."
-            )
-        raise UnsupportedMinuteHistoryError(f"Minute history unavailable for requested date={date_yyyy_mm_dd}.")
-
-    rows = []
-    for item in trends:
-        if not isinstance(item, str):
-            continue
-        parts = item.split(",")
-        if len(parts) < 8:
-            continue
-        dt = parts[0]
-        if not dt.startswith(date_yyyy_mm_dd + " "):
-            continue
-        # trends2 row format (empirical):
-        # datetime, open, close, high, low, volume(手), amount(元), avg_price
-        try:
-            o = float(parts[1])
-            c = float(parts[2])
-            h = float(parts[3])
-            l = float(parts[4])
-            v = float(parts[5])
-            amt = float(parts[6])
-            avg = float(parts[7])
-        except Exception:
-            continue
-        rows.append(
-            {
-                "时间": dt,
-                "_open_raw": o,
-                "_close_raw": c,
-                "_high_raw": h,
-                "_low_raw": l,
-                "成交量(手)": v,
-                "_amount_raw": amt,
-                "_avg_raw": avg,
-            }
-        )
-
-    if not rows:
-        return pd.DataFrame(columns=["时间", "开盘", "收盘", "最高", "最低", "成交量(手)", "成交额(元)", "均价"])
-
-    df = pd.DataFrame(rows)
-    df["时间"] = df["时间"].astype(str)
-
-    factor = 1.0
-    if fqt_str != "0":
-        close_raw_today, _prev_close_raw = _daily_close_and_prev_close(symbol, date_yyyy_mm_dd, "0")
-        close_adj_today, _prev_close_adj = _daily_close_and_prev_close(symbol, date_yyyy_mm_dd, fqt_str)
-        if close_raw_today and close_adj_today and close_raw_today > 0:
-            factor = float(close_adj_today) / float(close_raw_today)
-
-    df["开盘"] = df["_open_raw"].astype(float) * factor
-    df["收盘"] = df["_close_raw"].astype(float) * factor
-    df["最高"] = df["_high_raw"].astype(float) * factor
-    df["最低"] = df["_low_raw"].astype(float) * factor
-    df["均价"] = df["_avg_raw"].astype(float) * factor
-    df["成交额(元)"] = df["_amount_raw"].astype(float) * factor
-
-    df["成交量(手)"] = pd.to_numeric(df["成交量(手)"], errors="coerce")
-    for col in ["开盘", "收盘", "最高", "最低", "成交额(元)", "均价"]:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
-
-    df = df.sort_values("时间").reset_index(drop=True)
-    return df[["时间", "开盘", "收盘", "最高", "最低", "成交量(手)", "成交额(元)", "均价"]]
 
 
 def _fetch_tx_minute_query(symbol: str) -> tuple[str, list[str]]:
@@ -529,7 +316,7 @@ def _fetch_tx_minute_query(symbol: str) -> tuple[str, list[str]]:
 def fetch_tx_1m(symbol: str, date_yyyy_mm_dd: str, fqt: int | str = 1) -> pd.DataFrame:
     """Fetch 1-minute bars for a single trading day via Tencent.
 
-    Output columns are aligned with Eastmoney minute-bar schema:
+    Output columns:
     - 时间 (YYYY-MM-DD HH:MM)
     - 开盘/收盘/最高/最低/均价 (腾讯 minute/query only provides one price per minute;
       we map it to OHLC=均价=price)
@@ -590,21 +377,12 @@ def fetch_tx_1m(symbol: str, date_yyyy_mm_dd: str, fqt: int | str = 1) -> pd.Dat
     df = pd.DataFrame(rows)
     df["时间"] = df["时间"].astype(str)
 
-    factor = 1.0
-    if fqt_str != "0":
-        close_raw_today, _prev_close_raw = _daily_close_and_prev_close(symbol, date_yyyy_mm_dd, "0")
-        close_adj_today, _prev_close_adj = _daily_close_and_prev_close(symbol, date_yyyy_mm_dd, fqt_str)
-        if close_raw_today and close_adj_today and close_raw_today > 0:
-            factor = float(close_adj_today) / float(close_raw_today)
-
-    df["开盘"] = pd.to_numeric(df["_open_raw"], errors="coerce") * factor
-    df["收盘"] = pd.to_numeric(df["_close_raw"], errors="coerce") * factor
-    df["最高"] = pd.to_numeric(df["_high_raw"], errors="coerce") * factor
-    df["最低"] = pd.to_numeric(df["_low_raw"], errors="coerce") * factor
-    df["均价"] = pd.to_numeric(df["_avg_raw"], errors="coerce") * factor
+    df["开盘"] = pd.to_numeric(df["_open_raw"], errors="coerce")
+    df["收盘"] = pd.to_numeric(df["_close_raw"], errors="coerce")
+    df["最高"] = pd.to_numeric(df["_high_raw"], errors="coerce")
+    df["最低"] = pd.to_numeric(df["_low_raw"], errors="coerce")
+    df["均价"] = pd.to_numeric(df["_avg_raw"], errors="coerce")
     df["成交额(元)"] = pd.to_numeric(df["_amount_raw"], errors="coerce")
-    if factor != 1.0:
-        df["成交额(元)"] = df["成交额(元)"].astype(float) * factor
 
     df["成交量(手)"] = pd.to_numeric(df["成交量(手)"], errors="coerce")
 
@@ -636,7 +414,7 @@ def fetch_ts_1m(symbol: str, date_yyyy_mm_dd: str, fqt: int | str = 1) -> pd.Dat
 def fetch_1m(symbol: str, date_yyyy_mm_dd: str, fqt: int | str = 1) -> tuple[pd.DataFrame, str]:
     """Fetch 1-minute bars with source selection and fallback.
 
-    Primary source is controlled by GP_MINUTE_SOURCE (default: em).
+    Primary source is controlled by GP_MINUTE_SOURCE (default: ts).
     Fallback tries the other source on ProxyError or UnsupportedMinuteHistoryError.
     """
 
@@ -655,11 +433,9 @@ def fetch_1m(symbol: str, date_yyyy_mm_dd: str, fqt: int | str = 1) -> tuple[pd.
                 return fetch_ts_1m(symbol, date_yyyy_mm_dd, fqt=fqt), "ts"
             if src == "tx":
                 return fetch_tx_1m(symbol, date_yyyy_mm_dd, fqt=fqt), "tx"
-            return fetch_em_1m(symbol, date_yyyy_mm_dd, fqt=fqt), "em"
         except Exception as e:
             if first_err is None:
                 first_err = e
-            # Only fallback on common/expected failure modes.
             if _is_proxy_error(e) or isinstance(e, UnsupportedMinuteHistoryError) or isinstance(e, RateLimitedError):
                 continue
             raise
@@ -733,7 +509,7 @@ def get_daily(
                 else:
                     minute_df["换手率(%)"] = pd.NA
                 total_detail_df = minute_df
-                provider = "Tushare" if src == "ts" else "Tencent" if src == "tx" else "Eastmoney"
+                provider = "Tushare" if src == "ts" else "Tencent"
                 print(f"Fetched {len(minute_df)} 1-minute rows from {provider} for {symbol} {date_str}")
             else:
                 print(f"No data found for {symbol} on {date_str}")

@@ -308,7 +308,7 @@ def _warn_if_free_source_window_risky(source: str, trade_dates: list[str]) -> No
     earliest_dt = datetime.strptime(earliest, "%Y-%m-%d")
     if (latest_dt - earliest_dt).days > 7:
         print(
-            "[WARN] Eastmoney/Tencent free minute endpoints usually only cover the most recent few trading days. "
+            "[WARN] Tencent free minute endpoints usually only cover the most recent few trading days. "
             "Older dates may fail unless you switch to --source ts and have minute permission."
         )
 

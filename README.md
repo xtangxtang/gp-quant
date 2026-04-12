@@ -90,13 +90,12 @@ pip install -r requirements.txt
 
 默认行为：
 
-- 优先使用免费 Eastmoney 分钟源
+- 优先使用 Tushare 分钟源
 - 自动跳过已经完整落盘的日文件
 - 未显式指定日期时，只同步最近 `3` 个交易日，便于日常增量更新和补漏
 - 默认使用原始分钟价 `fqt=0`，避免在缺少额外复权辅助模块时出现语义偏差
-- 现在已补齐 Eastmoney 辅助模块：`--fqt 1/2` 可做分钟价复权，分钟文件里的 `换手率(%)` 也会按流通股本补齐
 - 现在会自动读取 `failed_tasks.json`，优先续跑历史失败任务，并在初始轮结束后对失败项做多轮自动续跑
-- 当主源是免费 `em/tx` 时，失败续跑轮次会在 Eastmoney 和 Tencent 之间自动切换主源，降低单一网页源的连续压力
+- 当主源是免费 `tx` 时，失败续跑轮次会在 Tencent 和 Tushare 之间自动切换主源
 
 ```bash
 ./scripts/run_sync_a_share_1m.sh -o /nvme5/xtang/gp-workspace/gp-data
@@ -116,7 +115,7 @@ pip install -r requirements.txt
     --recent-open-days 3 \
     --retry-failed-only
 
-# 初始轮先走 Eastmoney，失败续跑轮次自动切到 Tencent 再切回 Eastmoney
+# 初始轮先走 Tushare，失败续跑轮次自动切到 Tencent
 ./scripts/run_sync_a_share_1m.sh \
     -o /nvme5/xtang/gp-workspace/gp-data \
     --recent-open-days 3 \
@@ -139,7 +138,7 @@ pip install -r requirements.txt
 
 限制说明：
 
-- 免费 Eastmoney / Tencent 分钟接口通常只覆盖最近几个交易日，不适合补很久以前的 1 分钟历史
+- 免费 Tencent 分钟接口通常只覆盖最近几个交易日，不适合补很久以前的 1 分钟历史
 - 如果要做更长历史区间回补，通常需要 `--source ts` 且你的 Tushare 账户具备分钟权限
 - 免费网页源批量抓取时仍可能出现代理或限流抖动；现在脚本会把失败项写入 `failed_tasks.json` 并自动续跑，但不能保证一次性全量成功
 

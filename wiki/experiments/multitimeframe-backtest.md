@@ -12,7 +12,7 @@ open-questions:
 # 多时间框架共振回测
 
 **输出**: `results/multitimeframe_resonance/`  
-**系统**: [[multitimeframe-scanner]]
+**系统**: [multitimeframe-scanner](../entities/multitimeframe-scanner.md)
 
 ## 方法
 
@@ -31,9 +31,9 @@ open-questions:
 
 ## 相关实体
 
-- [[multitimeframe-scanner]] — 被测系统
+- [multitimeframe-scanner](../entities/multitimeframe-scanner.md) — 被测系统
 
 ## 相关概念
 
-- [[multitimeframe-resonance]] — 理论基础
-- [[fractal]] — 多尺度一致性
+- [multitimeframe-resonance](../concepts/multitimeframe-resonance.md) — 理论基础
+- [fractal](../concepts/fractal.md) — 多尺度一致性

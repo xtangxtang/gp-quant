@@ -41,12 +41,12 @@ $$H_{PE} = -\sum_{i=1}^{m!} p_i \log p_i$$
 permutation_entropy(series, m=3, delay=1)
 ```
 
-在 [[tick-entropy-module]] 中，`permutation_entropy` 是 `market_state_classifier()` 的三个输入之一。
+在 [tick-entropy-module](../entities/tick-entropy-module.md) 中，`permutation_entropy` 是 `market_state_classifier()` 的三个输入之一。
 
-在 [[four-layer-system]] 第二层中，`perm_entropy` 参与计算 `entropy_quality` 分数。
+在 [four-layer-system](../entities/four-layer-system.md) 第二层中，`perm_entropy` 参与计算 `entropy_quality` 分数。
 
 ## 相关概念
 
-- [[entropy]] — 熵的总体框架
-- [[path-irreversibility]] — 另一个基于转移概率的熵指标
-- [[dominant-eigenvalue]] — 与置换熵互补的分岔指标
+- [entropy](entropy.md) — 熵的总体框架
+- [path-irreversibility](path-irreversibility.md) — 另一个基于转移概率的熵指标
+- [dominant-eigenvalue](dominant-eigenvalue.md) — 与置换熵互补的分岔指标

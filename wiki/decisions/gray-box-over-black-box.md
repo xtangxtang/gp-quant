@@ -17,14 +17,14 @@ updated: 2026-04-12
 
 ### 理论 — PINN 论文
 
-[[pinn-vs-neural-ode]]: 在临界态下，嵌入物理约束的模型显著优于纯黑箱。
+[pinn-vs-neural-ode](../sources/pinn-vs-neural-ode.md): 在临界态下，嵌入物理约束的模型显著优于纯黑箱。
 - 数据稀疏的关键区域（分岔点附近）黑箱容易发散
 - 结构约束提供归纳偏置，减少所需训练样本
 
 ### 共识 #8
 
 > 灰箱 + 结构约束 > 纯黑箱时间序列模型  
-> 见 [[12-papers-synthesis]]
+> 见 [12-papers-synthesis](../sources/12-papers-synthesis.md)
 
 ### 实践理由
 

@@ -32,16 +32,16 @@ $$H = \frac{\log(R/S)}{\log(n)}$$
 - $H = 0.5$: 随机游走
 - $H < 0.5$: 均值回复
 
-在 [[multitimeframe-scanner]] 的物理特征中使用 Hurst 指数评估趋势持续性。
+在 [multitimeframe-scanner](../entities/multitimeframe-scanner.md) 的物理特征中使用 Hurst 指数评估趋势持续性。
 
 ## 在本项目中的应用
 
-**多时间框架共振** ([[multitimeframe-resonance]]) 就是分形思想的直接应用：
+**多时间框架共振** ([multitimeframe-resonance](multitimeframe-resonance.md)) 就是分形思想的直接应用：
 - 日线开始趋势 + 周线确认 + 月线不矛盾 → 共振信号
 - 本质上是检测分形结构中的一致性
 
 ## 相关概念
 
-- [[multitimeframe-resonance]] — 多时间框架共振
-- [[entropy]] — 不同尺度的熵度量
-- [[dissipative-structure]] — 尺度间的能量传递
+- [multitimeframe-resonance](multitimeframe-resonance.md) — 多时间框架共振
+- [entropy](entropy.md) — 不同尺度的熵度量
+- [dissipative-structure](dissipative-structure.md) — 尺度间的能量传递

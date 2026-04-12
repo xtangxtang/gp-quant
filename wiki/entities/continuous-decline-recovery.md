@@ -50,10 +50,10 @@ no_setup → selloff → repair_watch → buy_window → rebound_crowded
 
 ## 相关实体
 
-- [[data-pipeline]] — 数据源
-- [[hold-exit-system]] — 买入后的持仓管理
+- [data-pipeline](data-pipeline.md) — 数据源
+- [hold-exit-system](hold-exit-system.md) — 买入后的持仓管理
 
 ## 相关概念
 
-- [[dissipative-structure]] — 恢复 = 新的有序结构形成
-- [[bifurcation]] — 从熊市吸引子向恢复吸引子的转变
+- [dissipative-structure](../concepts/dissipative-structure.md) — 恢复 = 新的有序结构形成
+- [bifurcation](../concepts/bifurcation.md) — 从熊市吸引子向恢复吸引子的转变

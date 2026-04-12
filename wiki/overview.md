@@ -29,33 +29,33 @@ updated: 2026-04-12
 - **定时调度**: 每日 16:00 自动更新 (`eod_data_scheduler.py`)
 
 ### 策略层 (`src/strategy/`)
-1. **[[multitimeframe-scanner]]** — 主力策略：日/周/月多时间框架共振扫描
-2. **[[four-layer-system]]** — 四层熵分岔选股：市场门 → 股票状态 → 执行成本 → 实验层
-3. **[[continuous-decline-recovery]]** — 连续下跌恢复买入策略
-4. **[[hold-exit-system]]** — 持有/退出决策：熵储备 + 状态流
+1. **[multitimeframe-scanner](entities/multitimeframe-scanner.md)** — 主力策略：日/周/月多时间框架共振扫描
+2. **[four-layer-system](entities/four-layer-system.md)** — 四层熵分岔选股：市场门 → 股票状态 → 执行成本 → 实验层
+3. **[continuous-decline-recovery](entities/continuous-decline-recovery.md)** — 连续下跌恢复买入策略
+4. **[hold-exit-system](entities/hold-exit-system.md)** — 持有/退出决策：熵储备 + 状态流
 
 ### 核心计算 (`src/core/`)
-- **[[tick-entropy-module]]** — 5 个熵指标 + 市场状态分类器
+- **[tick-entropy-module](entities/tick-entropy-module.md)** — 5 个熵指标 + 市场状态分类器
 
 ### 可视化 (`web/`)
-- **[[web-dashboard]]** — Flask Web 面板
+- **[web-dashboard](entities/web-dashboard.md)** — Flask Web 面板
 
 ## 理论基础
 
-项目的选股逻辑建立在 12 篇学术论文的综合分析之上（详见 [[12-papers-synthesis]]）：
+项目的选股逻辑建立在 12 篇学术论文的综合分析之上（详见 [12-papers-synthesis](sources/12-papers-synthesis.md)）：
 
-- **[[entropy]]** — 市场无序度度量；低熵 = 资本流入 = 趋势形成
-- **[[bifurcation]]** — 系统在临界点发生质变，横盘突破
-- **[[path-irreversibility]]** — 前向/反向转移不对称 = 主力控盘信号
-- **[[strategic-abandonment]]** — 噪声过高时战略性退出
+- **[entropy](concepts/entropy.md)** — 市场无序度度量；低熵 = 资本流入 = 趋势形成
+- **[bifurcation](concepts/bifurcation.md)** — 系统在临界点发生质变，横盘突破
+- **[path-irreversibility](concepts/path-irreversibility.md)** — 前向/反向转移不对称 = 主力控盘信号
+- **[strategic-abandonment](concepts/strategic-abandonment.md)** — 噪声过高时战略性退出
 
 ## 关键教训
 
 | 教训 | 详情 | 决策页 |
 |------|------|--------|
-| 熵因子在分钟级无效 | 35% 胜率，远低于随机 | [[why-daily-not-minute]] |
-| 灰箱优于黑箱 | 结构约束的 PINN > 纯 NN | [[gray-box-over-black-box]] |
-| 交易成本是杀手 | 高换手 + 低利润 = 手续费吞噬收益 | [[entropy-backtest-minute]] |
+| 熵因子在分钟级无效 | 35% 胜率，远低于随机 | [why-daily-not-minute](decisions/why-daily-not-minute.md) |
+| 灰箱优于黑箱 | 结构约束的 PINN > 纯 NN | [gray-box-over-black-box](decisions/gray-box-over-black-box.md) |
+| 交易成本是杀手 | 高换手 + 低利润 = 手续费吞噬收益 | [entropy-backtest-minute](experiments/entropy-backtest-minute.md) |
 
 ## 数据位置
 

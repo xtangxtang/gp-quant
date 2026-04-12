@@ -29,9 +29,9 @@ open-questions:
 
 ## 相关实体
 
-- [[four-layer-system]] — 被测系统
-- [[tick-entropy-module]] — 核心计算
+- [four-layer-system](../entities/four-layer-system.md) — 被测系统
+- [tick-entropy-module](../entities/tick-entropy-module.md) — 核心计算
 
 ## 相关实验
 
-- [[entropy-backtest-minute]] — 分钟级失败促使转向日线
+- [entropy-backtest-minute](entropy-backtest-minute.md) — 分钟级失败促使转向日线

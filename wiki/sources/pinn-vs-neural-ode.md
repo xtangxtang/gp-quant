@@ -20,7 +20,7 @@ updated: 2026-04-12
 
 ## 对本项目的意义
 
-这是我们选择 [[gray-box-over-black-box]] 路线的理论支撑：
+这是我们选择 [gray-box-over-black-box](../decisions/gray-box-over-black-box.md) 路线的理论支撑：
 
 | 方法 | 优势 | 劣势 |
 |------|------|------|
@@ -37,8 +37,8 @@ updated: 2026-04-12
 ## 共识映射
 
 → 共识 #8: 灰箱 + 结构约束 > 纯黑箱时间序列模型  
-→ 见 [[12-papers-synthesis]]
+→ 见 [12-papers-synthesis](12-papers-synthesis.md)
 
 ## 概念链接
 
-- [[entropy]], [[bifurcation]], [[dominant-eigenvalue]]
+- [entropy](../concepts/entropy.md), [bifurcation](../concepts/bifurcation.md), [dominant-eigenvalue](../concepts/dominant-eigenvalue.md)

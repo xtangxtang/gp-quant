@@ -24,17 +24,17 @@ open-questions:
 > **市场熵 ≠ 物理熵**  
 > 我们计算的是不可逆性代理量（proxy），不是真实热力学熵产生。  
 > Seifert (2025) 证明：粗粒化观测（日 K 线）只能给出熵产生的**下界**。  
-> 见 [[seifert-2025-entropy-bounds]]
+> 见 [seifert-2025-entropy-bounds](../sources/seifert-2025-entropy-bounds.md)
 
 ## 本项目中的熵指标
 
 | 指标 | 含义 | 模块 |
 |------|------|------|
-| `path_irreversibility` | 前向/反向转移概率的 KL 散度 | [[tick-entropy-module]] |
-| `permutation_entropy` | 基于序型的复杂度（Bandt & Pompe 2002） | [[tick-entropy-module]] |
-| `waiting_time_entropy` | 交易间隔分布的熵 | [[tick-entropy-module]] |
-| `turnover_rate_entropy` | 换手率分布的熵 | [[tick-entropy-module]] |
-| `coupling_entropy` | 市场整体耦合熵（[[four-layer-system]] 第一层） | [[four-layer-system]] |
+| `path_irreversibility` | 前向/反向转移概率的 KL 散度 | [tick-entropy-module](../entities/tick-entropy-module.md) |
+| `permutation_entropy` | 基于序型的复杂度（Bandt & Pompe 2002） | [tick-entropy-module](../entities/tick-entropy-module.md) |
+| `waiting_time_entropy` | 交易间隔分布的熵 | [tick-entropy-module](../entities/tick-entropy-module.md) |
+| `turnover_rate_entropy` | 换手率分布的熵 | [tick-entropy-module](../entities/tick-entropy-module.md) |
+| `coupling_entropy` | 市场整体耦合熵（[four-layer-system](../entities/four-layer-system.md) 第一层） | [four-layer-system](../entities/four-layer-system.md) |
 
 ## 交易含义
 
@@ -46,12 +46,12 @@ open-questions:
 
 > 市场熵 = 不可逆性代理，非真正热力学量。  
 > 时变耦合结构 > 单一资产熵。  
-> 见 [[12-papers-synthesis]]
+> 见 [12-papers-synthesis](../sources/12-papers-synthesis.md)
 
 ## 相关概念
 
-- [[path-irreversibility]] — 路径不可逆性
-- [[permutation-entropy]] — 置换熵的详细说明
-- [[bifurcation]] — 熵降低预示分岔临近
-- [[dissipative-structure]] — 耗散结构中的熵流
-- [[strategic-abandonment]] — 高熵时的最优退出策略
+- [path-irreversibility](path-irreversibility.md) — 路径不可逆性
+- [permutation-entropy](permutation-entropy.md) — 置换熵的详细说明
+- [bifurcation](bifurcation.md) — 熵降低预示分岔临近
+- [dissipative-structure](dissipative-structure.md) — 耗散结构中的熵流
+- [strategic-abandonment](strategic-abandonment.md) — 高熵时的最优退出策略

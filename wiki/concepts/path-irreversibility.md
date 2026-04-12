@@ -40,18 +40,18 @@ path_irreversibility_entropy(states, window=60)
 
 ## 在本项目中的应用
 
-- [[tick-entropy-module]]: `market_state_classifier()` 的核心输入
-- [[four-layer-system]] 第二层: `path_irreversibility_20`（20 日窗口）参与 `entropy_quality` 计算
-- 与 [[permutation-entropy]] 互补：路径不可逆检测方向性，置换熵检测复杂度
+- [tick-entropy-module](../entities/tick-entropy-module.md): `market_state_classifier()` 的核心输入
+- [four-layer-system](../entities/four-layer-system.md) 第二层: `path_irreversibility_20`（20 日窗口）参与 `entropy_quality` 计算
+- 与 [permutation-entropy](permutation-entropy.md) 互补：路径不可逆检测方向性，置换熵检测复杂度
 
 ## 关键约束
 
 > Seifert (2025) 证明：从粗粒化观测计算的不可逆性只是真实熵产生的**下界**。  
 > 我们看到的是「至少这么不可逆」，实际可能更强。  
-> 见 [[seifert-2025-entropy-bounds]]
+> 见 [seifert-2025-entropy-bounds](../sources/seifert-2025-entropy-bounds.md)
 
 ## 相关概念
 
-- [[entropy]] — 路径不可逆是熵的一种度量
-- [[permutation-entropy]] — 互补指标
-- [[strategic-abandonment]] — 低不可逆 + 高噪声 → 放弃
+- [entropy](entropy.md) — 路径不可逆是熵的一种度量
+- [permutation-entropy](permutation-entropy.md) — 互补指标
+- [strategic-abandonment](strategic-abandonment.md) — 低不可逆 + 高噪声 → 放弃

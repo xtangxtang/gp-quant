@@ -44,7 +44,7 @@ updated: 2026-04-12
 
 ## 关键参数
 
-见 [[multitimeframe-resonance]] 的生产参数表。
+见 [multitimeframe-resonance](../concepts/multitimeframe-resonance.md) 的生产参数表。
 
 ## Smoke Test
 
@@ -58,11 +58,11 @@ python src/strategy/multitimeframe/run_multitimeframe_resonance_scan.py \
 
 ## 相关实体
 
-- [[tick-entropy-module]] — 物理特征计算基础
-- [[four-layer-system]] — 互补策略（熵分岔 vs 多框架共振）
-- [[data-pipeline]] — 数据源
+- [tick-entropy-module](tick-entropy-module.md) — 物理特征计算基础
+- [four-layer-system](four-layer-system.md) — 互补策略（熵分岔 vs 多框架共振）
+- [data-pipeline](data-pipeline.md) — 数据源
 
 ## 相关概念
 
-- [[multitimeframe-resonance]] — 理论基础
-- [[fractal]] — 多尺度自相似性
+- [multitimeframe-resonance](../concepts/multitimeframe-resonance.md) — 理论基础
+- [fractal](../concepts/fractal.md) — 多尺度自相似性

@@ -16,14 +16,14 @@ updated: 2026-04-12
 
 ## 对本项目的贡献
 
-这是 [[strategic-abandonment]] 的理论基础：
+这是 [strategic-abandonment](../concepts/strategic-abandonment.md) 的理论基础：
 
 > 在高噪声市场中试图精确择时/选股，信息处理成本（研究时间、计算资源、心理压力）可能超过潜在收益。  
 > 数学上最优的策略是**不交易**。
 
 ## 实现
 
-[[four-layer-system]] 第一层的 `noise_cost` 指标直接来源于此论文的启发：
+[four-layer-system](../entities/four-layer-system.md) 第一层的 `noise_cost` 指标直接来源于此论文的启发：
 
 ```
 noise_cost ↑ + coupling_entropy ↑ → market_gate = 'abandon'
@@ -34,8 +34,8 @@ noise_cost ↑ + coupling_entropy ↑ → market_gate = 'abandon'
 ## 共识映射
 
 → 共识 #7: 信息处理有真实成本；高噪声 = 战略放弃  
-→ 见 [[12-papers-synthesis]]
+→ 见 [12-papers-synthesis](12-papers-synthesis.md)
 
 ## 概念链接
 
-- [[strategic-abandonment]], [[entropy]], [[four-layer-system]]
+- [strategic-abandonment](../concepts/strategic-abandonment.md), [entropy](../concepts/entropy.md), [four-layer-system](../entities/four-layer-system.md)

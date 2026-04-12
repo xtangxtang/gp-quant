@@ -24,7 +24,7 @@ updated: 2026-04-12
 
 > **适合做门控/过滤器，不适合做主信号。**
 
-这是 [[four-layer-system]] 第四层（实验层）的候选技术之一，当前权重 = 0%。
+这是 [four-layer-system](../entities/four-layer-system.md) 第四层（实验层）的候选技术之一，当前权重 = 0%。
 
 理由（共识 #5）：
 - TDA 和储层计算的信号可靠性尚未在金融数据上充分验证
@@ -34,8 +34,8 @@ updated: 2026-04-12
 ## 共识映射
 
 → 共识 #5: TDA + 储层计算适合作为门控/过滤器，不适合主信号  
-→ 见 [[12-papers-synthesis]]
+→ 见 [12-papers-synthesis](12-papers-synthesis.md)
 
 ## 概念链接
 
-- [[bifurcation]], [[dominant-eigenvalue]], [[four-layer-system]]
+- [bifurcation](../concepts/bifurcation.md), [dominant-eigenvalue](../concepts/dominant-eigenvalue.md), [four-layer-system](../entities/four-layer-system.md)

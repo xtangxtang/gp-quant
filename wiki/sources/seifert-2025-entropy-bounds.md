@@ -33,13 +33,13 @@ $\sigma_{true}$: 包含所有 tick 级信息的真实熵产生
 |------|------|
 | 信号设计 | `path_irreversibility` 是保守估计，阈值不宜设太高 |
 | 置信度 | 检测到的信号可信（至少这么不可逆），未检测到不代表没有 |
-| 时间尺度 | 更细粒度的数据 → 更紧的下界 → 但分钟级回测已证明无效 ([[why-daily-not-minute]]) |
+| 时间尺度 | 更细粒度的数据 → 更紧的下界 → 但分钟级回测已证明无效 ([why-daily-not-minute](../decisions/why-daily-not-minute.md)) |
 
 ## 共识映射
 
 → 共识 #1: 市场熵 = 不可逆性代理，非真正热力学量  
-→ 见 [[12-papers-synthesis]]
+→ 见 [12-papers-synthesis](12-papers-synthesis.md)
 
 ## 概念链接
 
-- [[entropy]], [[path-irreversibility]], [[tick-entropy-module]]
+- [entropy](../concepts/entropy.md), [path-irreversibility](../concepts/path-irreversibility.md), [tick-entropy-module](../entities/tick-entropy-module.md)

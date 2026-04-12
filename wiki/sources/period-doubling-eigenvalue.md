@@ -30,8 +30,8 @@ $$|\lambda_{dom}| \to 1 \implies \text{临界减速 → 分岔临近}$$
 
 | 影响 | 实现 |
 |------|------|
-| 核心指标 | `dominant_eigenvalue_from_autocorr()` in [[tick-entropy-module]] |
-| 四层系统 | `dominant_eig_20` 是第二层的关键输入 ([[four-layer-system]]) |
+| 核心指标 | `dominant_eigenvalue_from_autocorr()` in [tick-entropy-module](../entities/tick-entropy-module.md) |
+| 四层系统 | `dominant_eig_20` 是第二层的关键输入 ([four-layer-system](../entities/four-layer-system.md)) |
 | 相位校正 | `phase_adjusted_ar1_20` 去除周期性驱动 |
 | 阈值 | > 0.9 标记为分岔临近 |
 
@@ -39,8 +39,8 @@ $$|\lambda_{dom}| \to 1 \implies \text{临界减速 → 分岔临近}$$
 
 → 共识 #3: AR(1) + 方差不足以做真正的 EWS  
 → 共识 #4: 所有 EWS 必须处理周期性背景  
-→ 见 [[12-papers-synthesis]]
+→ 见 [12-papers-synthesis](12-papers-synthesis.md)
 
 ## 概念链接
 
-- [[dominant-eigenvalue]], [[bifurcation]], [[permutation-entropy]]
+- [dominant-eigenvalue](../concepts/dominant-eigenvalue.md), [bifurcation](../concepts/bifurcation.md), [permutation-entropy](../concepts/permutation-entropy.md)

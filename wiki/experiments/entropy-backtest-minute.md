@@ -39,9 +39,9 @@ updated: 2026-04-12
 
 ## 产出决策
 
-→ [[why-daily-not-minute]]: 切换到日线/周线应用  
-→ [[tick-entropy-module]]: 增加时间尺度警告
+→ [why-daily-not-minute](../decisions/why-daily-not-minute.md): 切换到日线/周线应用  
+→ [tick-entropy-module](../entities/tick-entropy-module.md): 增加时间尺度警告
 
 ## 概念链接
 
-- [[entropy]], [[permutation-entropy]], [[path-irreversibility]]
+- [entropy](../concepts/entropy.md), [permutation-entropy](../concepts/permutation-entropy.md), [path-irreversibility](../concepts/path-irreversibility.md)

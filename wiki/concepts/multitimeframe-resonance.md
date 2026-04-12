@@ -17,11 +17,11 @@ updated: 2026-04-12
 日线开始趋势 + 周线确认方向 + 月线不矛盾 → 共振信号
 ```
 
-这是 [[fractal]] 自相似性思想的直接应用：如果分形结构在多个尺度上一致，则趋势更可能持续。
+这是 [fractal](fractal.md) 自相似性思想的直接应用：如果分形结构在多个尺度上一致，则趋势更可能持续。
 
 ## 物理特征（5 维）
 
-[[multitimeframe-scanner]] 为每个时间框架计算 5 个物理特征：
+[multitimeframe-scanner](../entities/multitimeframe-scanner.md) 为每个时间框架计算 5 个物理特征：
 
 | 特征 | 含义 |
 |------|------|
@@ -53,6 +53,6 @@ resonance_score = weighted_sum(daily_score, weekly_score, monthly_score)
 
 ## 相关概念
 
-- [[fractal]] — 理论基础：多尺度自相似性
-- [[entropy]] — 每个时间框架的熵度量
-- [[multitimeframe-scanner]] — 实现此概念的系统
+- [fractal](fractal.md) — 理论基础：多尺度自相似性
+- [entropy](entropy.md) — 每个时间框架的熵度量
+- [multitimeframe-scanner](../entities/multitimeframe-scanner.md) — 实现此概念的系统

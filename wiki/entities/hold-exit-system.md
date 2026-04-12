@@ -53,12 +53,12 @@ updated: 2026-04-12
 
 ## 相关实体
 
-- [[tick-entropy-module]] — 熵储备计算
-- [[four-layer-system]] — 买入信号来源
-- [[multitimeframe-scanner]] — 买入信号来源
+- [tick-entropy-module](tick-entropy-module.md) — 熵储备计算
+- [four-layer-system](four-layer-system.md) — 买入信号来源
+- [multitimeframe-scanner](multitimeframe-scanner.md) — 买入信号来源
 
 ## 相关概念
 
-- [[entropy]] — 熵储备的含义
-- [[permutation-entropy]] — 通过置换熵判断趋势状态
-- [[path-irreversibility]] — 主力是否还在
+- [entropy](../concepts/entropy.md) — 熵储备的含义
+- [permutation-entropy](../concepts/permutation-entropy.md) — 通过置换熵判断趋势状态
+- [path-irreversibility](../concepts/path-irreversibility.md) — 主力是否还在

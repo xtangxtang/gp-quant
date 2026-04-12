@@ -14,7 +14,7 @@ updated: 2026-04-12
 
 ## 功能
 
-提供 5 个熵指标和 1 个状态分类器，是 [[four-layer-system]] 和 [[multitimeframe-scanner]] 的核心计算引擎。
+提供 5 个熵指标和 1 个状态分类器，是 [four-layer-system](four-layer-system.md) 和 [multitimeframe-scanner](multitimeframe-scanner.md) 的核心计算引擎。
 
 ## 5 个熵指标
 
@@ -48,14 +48,14 @@ df_result = build_tick_entropy_features(
 
 > ⚠️ **分钟级无效**: 回测证明熵因子在 240 分钟窗口下只有 35% 胜率。  
 > ✅ **日线有效**: 需要在日线或周线级别应用。  
-> 见 [[why-daily-not-minute]], [[entropy-backtest-minute]]
+> 见 [why-daily-not-minute](../decisions/why-daily-not-minute.md), [entropy-backtest-minute](../experiments/entropy-backtest-minute.md)
 
 ## 相关实体
 
-- [[four-layer-system]] — 使用本模块进行股票状态评估
-- [[multitimeframe-scanner]] — 物理特征计算中使用 Hurst 等指标
-- [[hold-exit-system]] — 熵储备判断使用本模块输出
+- [four-layer-system](four-layer-system.md) — 使用本模块进行股票状态评估
+- [multitimeframe-scanner](multitimeframe-scanner.md) — 物理特征计算中使用 Hurst 等指标
+- [hold-exit-system](hold-exit-system.md) — 熵储备判断使用本模块输出
 
 ## 相关概念
 
-- [[entropy]], [[permutation-entropy]], [[path-irreversibility]], [[dominant-eigenvalue]]
+- [entropy](../concepts/entropy.md), [permutation-entropy](../concepts/permutation-entropy.md), [path-irreversibility](../concepts/path-irreversibility.md), [dominant-eigenvalue](../concepts/dominant-eigenvalue.md)

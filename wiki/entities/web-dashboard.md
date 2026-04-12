@@ -19,6 +19,6 @@ updated: 2026-04-12
 
 ## 相关实体
 
-- [[multitimeframe-scanner]] — 展示共振扫描结果
-- [[four-layer-system]] — 展示四层系统输出
-- [[data-pipeline]] — 数据状态监控
+- [multitimeframe-scanner](multitimeframe-scanner.md) — 展示共振扫描结果
+- [four-layer-system](four-layer-system.md) — 展示四层系统输出
+- [data-pipeline](data-pipeline.md) — 数据状态监控

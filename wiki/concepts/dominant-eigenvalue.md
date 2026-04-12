@@ -43,12 +43,12 @@ dominant_eigenvalue_from_autocorr(series, p=5)
 
 | 系统 | 用途 | 阈值 |
 |------|------|------|
-| [[four-layer-system]] 第二层 | `dominant_eig_20`（20 日窗口） | > 0.9 → 分岔临近 |
-| [[tick-entropy-module]] | `market_state_classifier()` 输入之一 | 参与 `critical` 状态判定 |
-| [[four-layer-system]] 第二层 | `phase_adjusted_ar1_20` 与之互补 | 去除周期性驱动 |
+| [four-layer-system](../entities/four-layer-system.md) 第二层 | `dominant_eig_20`（20 日窗口） | > 0.9 → 分岔临近 |
+| [tick-entropy-module](../entities/tick-entropy-module.md) | `market_state_classifier()` 输入之一 | 参与 `critical` 状态判定 |
+| [four-layer-system](../entities/four-layer-system.md) 第二层 | `phase_adjusted_ar1_20` 与之互补 | 去除周期性驱动 |
 
 ## 相关概念
 
-- [[bifurcation]] — 主特征值检测的目标现象
-- [[permutation-entropy]] — 与之互补的复杂度指标
-- [[entropy]] — 低熵 + 高特征值 → 强信号
+- [bifurcation](bifurcation.md) — 主特征值检测的目标现象
+- [permutation-entropy](permutation-entropy.md) — 与之互补的复杂度指标
+- [entropy](entropy.md) — 低熵 + 高特征值 → 强信号

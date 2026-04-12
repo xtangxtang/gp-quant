@@ -30,7 +30,7 @@ contradictions:
 > **6 个不可直接套用之一**：  
 > Hamiltonian、Lagrangian、Onsager 形式在金融中没有自然对应物。  
 > 这是定性类比，不是定量模型。  
-> 见 [[12-papers-synthesis]]
+> 见 [12-papers-synthesis](../sources/12-papers-synthesis.md)
 
 ## 实用价值
 
@@ -41,6 +41,6 @@ contradictions:
 
 ## 相关概念
 
-- [[entropy]] — 熵的度量
-- [[bifurcation]] — 相变中的分岔点
-- [[fractal]] — 耗散系统中的多尺度结构
+- [entropy](entropy.md) — 熵的度量
+- [bifurcation](bifurcation.md) — 相变中的分岔点
+- [fractal](fractal.md) — 耗散系统中的多尺度结构

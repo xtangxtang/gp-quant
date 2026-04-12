@@ -64,6 +64,6 @@ updated: 2026-04-12
 
 ## 相关实体
 
-- [[multitimeframe-scanner]] — 消费日线数据
-- [[four-layer-system]] — 消费日线数据
-- [[web-dashboard]] — 展示数据
+- [multitimeframe-scanner](multitimeframe-scanner.md) — 消费日线数据
+- [four-layer-system](four-layer-system.md) — 消费日线数据
+- [web-dashboard](web-dashboard.md) — 展示数据

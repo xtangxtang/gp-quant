@@ -19,7 +19,7 @@ updated: 2026-04-13
 | 个股覆盖 | 5182 只A股 |
 | 指数基准 | 上证综指 (000001.SH) |
 | 结果位置 | `results/market_trend_2024/` |
-| 详细报告 | `src/strategy/entropy_accumulation_breakout/report/market_trend_analysis_2023H2_2026Q2.md` |
+| 详细报告 | `src/strategy/market_trend/report/market_trend_analysis_2023H2_2026Q2.md` |
 
 ## 整体结果
 

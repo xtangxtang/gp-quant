@@ -62,7 +62,7 @@
 
 - 回测区间: 20230703~20260410, 672个交易日, 5182只A股
 - 结果位置: `results/market_trend_2024/`
-- 详细分析报告: `src/strategy/entropy_accumulation_breakout/report/market_trend_analysis_2023H2_2026Q2.md`
+- 详细分析报告: `src/strategy/market_trend/report/market_trend_analysis_2023H2_2026Q2.md`
 - 核心发现:
   - DOWN占44%, NEUTRAL占43%, UP仅7%——A股多数时间不在上涨
   - STRONG_DOWN后20日平均涨+3.25%, 胜率58%——恐慌即机会

@@ -36,7 +36,9 @@
 | [agent-system](entities/agent-system.md) | Agent 调度系统：5 个数据 Agent + Supervisor | `src/agents/` |
 | [continuous-decline-recovery](entities/continuous-decline-recovery.md) | 连续下跌恢复买入策略 | `src/strategy/continuous_decline_recovery/` |
 | [hold-exit-system](entities/hold-exit-system.md) | 持有/退出决策系统（熵储备 + 快速膨胀 + 衰竭退出） | `src/strategy/uptrend_hold_state_flow/` |
+| [entropy-accumulation-breakout](entities/entropy-accumulation-breakout.md) | 熵惜售分岔突破策略（三阶段状态机：惜售→突破→崩塌） | `src/strategy/entropy_accumulation_breakout/` |
 | [web-dashboard](entities/web-dashboard.md) | Web 可视化面板 | `web/` |
+| [market-trend-system](entities/market-trend-system.md) | 大盘趋势判断系统（从小见大：7维度微观聚合宏观） | `src/strategy/market_trend/` |
 
 ## 来源 (Sources)
 
@@ -48,6 +50,9 @@
 | [pinn-vs-neural-ode](sources/pinn-vs-neural-ode.md) | PINN vs Neural ODE 在临界态的对比 | 2026 |
 | [communication-induced-bifurcation](sources/communication-induced-bifurcation.md) | 信息处理成本诱导分岔 | 2026 |
 | [12-papers-synthesis](sources/12-papers-synthesis.md) | 12 篇论文统一框架综合分析 | 2025-2026 |
+| [fan-2025-irreversibility](sources/fan-2025-irreversibility.md) | Fan et al. — KLD 不可逆性检测金融不稳定 | 2025 |
+| [dmitriev-2025-self-organization](sources/dmitriev-2025-self-organization.md) | Dmitriev et al. — 股票市场自组织到相变边缘 | 2025 |
+| [yan-2023-thermodynamic-bifurcation](sources/yan-2023-thermodynamic-bifurcation.md) | Yan et al. — 热力学预测分岔与非平衡相变 | 2023 |
 
 ## 实验 (Experiments)
 
@@ -56,6 +61,7 @@
 | [entropy-backtest-minute](experiments/entropy-backtest-minute.md) | 分钟级熵因子回测（240min 窗口） | ❌ 失败：35% 胜率 |
 | [four-layer-backtest-2025](experiments/four-layer-backtest-2025.md) | 四层系统 2025 年日线回测 | 进行中 |
 | [multitimeframe-backtest](experiments/multitimeframe-backtest.md) | 多时间框架共振回测 | 进行中 |
+| [market-trend-backtest-2024](experiments/market-trend-backtest-2024.md) | 大盘趋势回测 2023H2-2026Q2 (672天) | ✅ 完成: STRONG_DOWN后20日涨+3.25% |
 
 ## 决策 (Decisions)
 
@@ -66,4 +72,4 @@
 
 ---
 
-*最后更新: 2026-04-12 — 新增 Agent 调度系统*
+*最后更新: 2026-04-13 — 新增大盘趋势判断系统 + 2023H2-2026Q2回测分析*

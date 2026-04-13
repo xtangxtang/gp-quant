@@ -31,8 +31,10 @@ updated: 2026-04-12
 ### 策略层 (`src/strategy/`)
 1. **[multitimeframe-scanner](entities/multitimeframe-scanner.md)** — 主力策略：日/周/月多时间框架共振扫描
 2. **[four-layer-system](entities/four-layer-system.md)** — 四层熵分岔选股：市场门 → 股票状态 → 执行成本 → 实验层
-3. **[continuous-decline-recovery](entities/continuous-decline-recovery.md)** — 连续下跌恢复买入策略
-4. **[hold-exit-system](entities/hold-exit-system.md)** — 持有/退出决策：熵储备 + 状态流
+3. **[entropy-accumulation-breakout](entities/entropy-accumulation-breakout.md)** — 熵惜售分岔突破：三阶段状态机（惜售吸筹 → 分岔突破 → 结构崩塌退出）
+4. **[continuous-decline-recovery](entities/continuous-decline-recovery.md)** — 连续下跌恢复买入策略
+5. **[hold-exit-system](entities/hold-exit-system.md)** — 持有/退出决策：熵储备 + 状态流
+6. **[market-trend-system](entities/market-trend-system.md)** — 大盘趋势判断：从小见大（7维度微观聚合 + 宏观资金/流动性）
 
 ### 核心计算 (`src/core/`)
 - **[tick-entropy-module](entities/tick-entropy-module.md)** — 5 个熵指标 + 市场状态分类器
@@ -56,15 +58,22 @@ updated: 2026-04-12
 | 熵因子在分钟级无效 | 35% 胜率，远低于随机 | [why-daily-not-minute](decisions/why-daily-not-minute.md) |
 | 灰箱优于黑箱 | 结构约束的 PINN > 纯 NN | [gray-box-over-black-box](decisions/gray-box-over-black-box.md) |
 | 交易成本是杀手 | 高换手 + 低利润 = 手续费吞噬收益 | [entropy-backtest-minute](experiments/entropy-backtest-minute.md) |
+| A股多数时间不在涨 | DOWN双44%、NEUTRAL双43%、UP仅7%——需要大盘过滤 | [market-trend-backtest-2024](experiments/market-trend-backtest-2024.md) |
+| STRONG_DOWN=最佳买点 | 恐慌后20日均涨+3.25%，胜率58% | [market-trend-backtest-2024](experiments/market-trend-backtest-2024.md) |
 
 ## 数据位置
 
 ```
 /nvme5/xtang/gp-workspace/gp-data/
-├── tushare-daily-full/       # 日线 K 线（每股一文件，~5500 只）
+├── tushare-daily-full/       # 日线 K 线（每股一文件，~5500 只，含资金流、估值、换手率）
 ├── tushare-weekly-5d/        # 5 日周线 K 线（衍生数据）
 ├── trade/<symbol>/           # 分钟级交易数据 (~1350 万文件)
 ├── tushare-moneyflow/        # 资金流向
+├── tushare-margin/           # 两融余额（融资融券）
+├── tushare-shibor/           # SHIBOR 银行间拆借利率
+├── tushare-stk_limit/        # 涨跌停价格
+├── tushare-index-daily/      # 大盘指数日线
+├── tushare-index_member_all/ # 行业分类（申万）
 ├── tushare-adj_factor/       # 复权因子
 ├── tushare-fina_indicator/   # 财务指标
 ├── tushare_stock_basic.csv   # 股票基本信息

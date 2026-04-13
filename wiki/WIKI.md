@@ -52,7 +52,9 @@ wiki/
 │   ├── multitimeframe-scanner.md # 多时间框架扫描器
 │   ├── data-pipeline.md       # 数据管道
 │   ├── continuous-decline-recovery.md # 连续下跌恢复策略
+│   ├── entropy-accumulation-breakout.md # 熵惜售分岔突破策略
 │   ├── hold-exit-system.md    # 持有/退出决策系统
+│   ├── market-trend-system.md # 大盘趋势判断系统（从小见大）
 │   └── web-dashboard.md       # Web 可视化面板
 │
 ├── sources/                   # 来源摘要页
@@ -61,12 +63,16 @@ wiki/
 │   ├── reservoir-computing-tipping.md
 │   ├── pinn-vs-neural-ode.md
 │   ├── communication-induced-bifurcation.md
+│   ├── fan-2025-irreversibility.md    # Fan et al. — KLD 不可逆性
+│   ├── dmitriev-2025-self-organization.md # Dmitriev et al. — 自组织临界
+│   ├── yan-2023-thermodynamic-bifurcation.md # Yan et al. — 热力学分岔
 │   └── 12-papers-synthesis.md # 12 篇论文综合分析
 │
 ├── experiments/               # 实验与回测记录
 │   ├── entropy-backtest-minute.md    # 分钟级熵回测（失败）
 │   ├── four-layer-backtest-2025.md   # 四层系统回测
-│   └── multitimeframe-backtest.md    # 多时间框架回测
+│   ├── multitimeframe-backtest.md    # 多时间框架回测
+│   └── market-trend-backtest-2024.md # 大盘趋势回测 2023H2-2026Q2
 │
 └── decisions/                 # 架构决策记录
     ├── why-daily-not-minute.md       # 为什么选日线不选分钟线

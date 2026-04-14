@@ -8,7 +8,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "downloader"))
 from base_agent import BaseAgent
 
 # Categories from download_all_tushare.py that belong to "market data"
-MARKET_CATEGORIES = ["stock", "market", "index", "fund", "futures", "bond", "macro", "fx", "hk", "option"]
+MARKET_CATEGORIES = ["stock", "market", "index", "futures", "bond", "macro", "fx", "hk", "option"]
 
 
 class MarketDataAgent(BaseAgent):

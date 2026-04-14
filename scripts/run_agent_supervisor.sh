@@ -12,7 +12,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 DATA_DIR="${GP_DATA_DIR:-/nvme5/xtang/gp-workspace/gp-data}"
-TOKEN="${TUSHARE_TOKEN:-${GP_TUSHARE_TOKEN:-}}"
+TOKEN="${TUSHARE_TOKEN:-${GP_TUSHARE_TOKEN:-3404e77dbe323ba4582d677ace412c0bc257f72b39f956b7bf8f975f}}"
 
 export PYTHONPATH="${PROJECT_DIR}/src/agents:${PROJECT_DIR}/src/downloader:${PROJECT_DIR}/src:${PYTHONPATH:-}"
 

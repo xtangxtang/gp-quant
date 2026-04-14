@@ -48,7 +48,7 @@ AGENT_REGISTRY = {
         "module": "agent_market_data",
         "class": "MarketDataAgent",
         "description": "资金流 / 指数 / 市场数据",
-        "daily": False,
+        "daily": True,
     },
     "minute": {
         "depends_on": ["stock_list"],
@@ -64,6 +64,14 @@ AGENT_REGISTRY = {
         "module": "agent_derived",
         "class": "DerivedDataAgent",
         "description": "衍生数据（周线等）",
+        "daily": True,
+    },
+    "market_trend": {
+        "depends_on": ["derived", "market_data"],
+        "priority": 4,
+        "module": "agent_market_trend",
+        "class": "MarketTrendAgent",
+        "description": "大盘趋势判断（7 维度评分 + 报告）",
         "daily": True,
     },
 }
@@ -195,12 +203,14 @@ def cmd_run(data_dir: str, token: str, agent_name: str | None = None,
         # Run with retries
         ok = False
         for attempt in range(1, max_retries + 1):
-            print(f"\n[supervisor] Running {name} (attempt {attempt}/{max_retries})")
+            print(f"\n[supervisor] ▶ Running {name} — {reg['description']} (attempt {attempt}/{max_retries})")
             ok = _run_agent(data_dir, name, token)
+            state = _load_agent_state(data_dir, name)
+            dur = state.get("stats", {}).get("duration_seconds", 0)
             if ok:
+                print(f"[supervisor] ✓ {name} completed in {dur:.0f}s")
                 break
             if attempt < max_retries:
-                state = _load_agent_state(data_dir, name)
                 _alert(data_dir, name, "RETRY", f"attempt {attempt} failed: {state.get('last_error', '')}")
                 print(f"[supervisor] {name} failed, retry in {retry_interval}s...")
                 time.sleep(retry_interval)
@@ -211,10 +221,17 @@ def cmd_run(data_dir: str, token: str, agent_name: str | None = None,
             _alert(data_dir, name, "FAILED", state.get("last_error", ""))
 
     # Summary
-    print("\n[supervisor] Run summary:")
+    print(f"\n{'=' * 60}")
+    print(f"[supervisor] Run summary:")
+    print(f"  {'Agent':<20} {'Status':<10} {'Duration'}")
+    print(f"  {'-' * 20} {'-' * 10} {'-' * 10}")
     for name, ok in results.items():
         icon = "✓" if ok else "✗"
-        print(f"  {icon} {name}")
+        state = _load_agent_state(data_dir, name)
+        dur = state.get("stats", {}).get("duration_seconds", 0)
+        dur_str = f"{dur:.0f}s" if dur < 3600 else f"{dur/3600:.1f}h"
+        print(f"  {name:<20} {icon} {'ok':<8} {dur_str}" if ok else f"  {name:<20} {icon} {'FAIL':<8} {dur_str}")
+    print(f"{'=' * 60}")
 
     all_ok = all(results.values())
     if all_ok:

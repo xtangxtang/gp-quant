@@ -25,7 +25,7 @@ from .data_loader import (
     load_stk_limit,
 )
 from .macro_indicators import MacroIndicatorEngine, MacroSnapshot
-from .micro_indicators import MicroIndicatorEngine, MicroSnapshot
+from .micro_indicators import MicroIndicatorEngine, MicroSnapshot, SectorFlow
 
 
 # ---------------------------------------------------------------------------
@@ -259,6 +259,10 @@ def run_market_trend_scan(cfg: MarketTrendConfig) -> List[TrendState]:
     ema_advance: Optional[float] = None
     ema_alpha = 2.0 / (cfg.breadth_thrust_window + 1)
 
+    # 确定报告日期
+    report_date_int = int(cfg.report_date) if cfg.report_date else 0
+    report_sector_flows: List[SectorFlow] = []
+
     for i, date in enumerate(trading_dates):
         date_int = int(date)
 
@@ -269,6 +273,11 @@ def run_market_trend_scan(cfg: MarketTrendConfig) -> List[TrendState]:
         )
         if micro is None:
             continue
+
+        # 保存报告日期的板块流向
+        if cfg.report:
+            if report_date_int == 0 or date_int == report_date_int:
+                report_sector_flows = micro.sector_flows
 
         # 更新 EMA
         if ema_advance is None:
@@ -351,6 +360,24 @@ def run_market_trend_scan(cfg: MarketTrendConfig) -> List[TrendState]:
     if cfg.out_dir:
         os.makedirs(cfg.out_dir, exist_ok=True)
         _write_results(results, cfg)
+
+    # 7. 生成诊断报告
+    if cfg.report and results:
+        from .report_generator import generate_daily_report, write_report
+        # 找到报告对应的 TrendState
+        if report_date_int > 0:
+            target = [r for r in results if r.date == str(report_date_int)]
+            report_state = target[0] if target else results[-1]
+        else:
+            report_state = results[-1]
+        report_text = generate_daily_report(
+            report_state, report_sector_flows, results, cfg,
+        )
+        write_report(report_text, report_sector_flows,
+                     report_state.date, cfg.out_dir)
+        # 也输出到控制台
+        print(f"\n{'='*60}")
+        print(report_text)
 
     total_time = time.time() - t0
     print(f"[MarketTrend] 总耗时: {total_time:.1f}s")

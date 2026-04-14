@@ -13,7 +13,7 @@ updated: 2026-04-12
 
 ## 概述
 
-Agent 系统将数据下载拆分为 5 个独立 Agent，由 Supervisor 统一调度和监控。替代原有的 `eod_data_scheduler.py` 单进程模式。
+Agent 系统将数据下载拆分为 5 个数据 Agent + 1 个策略 Agent，由 Supervisor 统一调度和监控。替代原有的 `eod_data_scheduler.py` 单进程模式。
 
 ## 架构
 
@@ -28,9 +28,10 @@ Supervisor (supervisor.py)
 Agent 执行顺序（按优先级）:
   P0: stock_list         → 股票列表
   P1: daily_financial     → 日线 + 财务（依赖 stock_list）
-  P1: market_data         → 资金流/指数/市场数据（依赖 stock_list, 非每日）
+  P1: market_data         → 资金流/指数/市场数据（依赖 stock_list）
   P2: minute              → 1 分钟 K 线（依赖 stock_list）
   P3: derived             → 衍生数据/周线（依赖 daily_financial）
+  P4: market_trend        → 大盘趋势判断（依赖 derived + market_data）
 ```
 
 ## Agent 清单
@@ -39,9 +40,10 @@ Agent 执行顺序（按优先级）:
 |-------|------|------|------|
 | `stock_list` | `agent_stock_list.py` | 同步 stock_basic + gplist | 每日 |
 | `daily_financial` | `agent_daily_financial.py` | 日线行情 + 复权/涨跌停/停牌/分红 + 财报 | 每日 |
-| `market_data` | `agent_market_data.py` | 资金流/指数/两融/大宗/北向/期货/宏观利率 | 按需 |
+| `market_data` | `agent_market_data.py` | 资金流/指数/两融/大宗/北向/期货/宏观利率 | 每日 |
 | `minute` | `agent_minute.py` | 1 分钟 K 线 (Tushare) | 每日 |
 | `derived` | `agent_derived.py` | 衍生数据（5 日周线等） | 每日 |
+| `market_trend` | `agent_market_trend.py` | 大盘趋势判断（7 维度评分 + 报告） | 每日 |
 
 ## 状态管理
 
@@ -54,6 +56,7 @@ gp-data/
 ├── .agent_market_data_state.json
 ├── .agent_minute_state.json
 ├── .agent_derived_state.json
+├── .agent_market_trend_state.json
 ├── .agent_stock_list.lock          # fcntl 排他锁
 └── .agent_alerts.log               # 告警日志
 ```
@@ -66,14 +69,11 @@ gp-data/
 # 查看所有 Agent 状态
 ./scripts/run_agent_supervisor.sh status
 
-# 运行每日增量同步（stock_list → daily_financial → minute → derived）
+# 运行每日同步（stock_list → daily_financial/market_data → minute → derived → market_trend）
 ./scripts/run_agent_supervisor.sh run
 
 # 只运行某个 Agent
 ./scripts/run_agent_supervisor.sh run --agent daily_financial
-
-# 包含非每日 Agent（如 market_data）
-./scripts/run_agent_supervisor.sh run --all
 
 # 守护进程模式
 ./scripts/run_agent_supervisor.sh daemon --schedule-time 16:00
@@ -92,6 +92,7 @@ gp-data/
 - 各 Agent 内部调用 `src/downloader/` 的已有下载函数，不重复实现下载逻辑
 - `stock_list` 是所有其他 Agent 的前置依赖（提供股票列表）
 - `derived` 依赖 `daily_financial`（需要日线数据生成周线）
+- `market_trend` 依赖 `derived` + `market_data`（需要所有数据就绪后运行趋势判断）
 
 ## 相关实体
 

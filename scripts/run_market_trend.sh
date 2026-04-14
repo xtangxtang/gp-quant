@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 大盘趋势判断 - 从小见大
-# 用法: bash scripts/run_market_trend.sh [START_DATE] [END_DATE]
+# 用法: bash scripts/run_market_trend.sh [START_DATE] [END_DATE] [--report] [--report-date YYYYMMDD]
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -10,12 +10,33 @@ OUT_DIR="./results/market_trend"
 
 START_DATE="${1:-20240101}"
 END_DATE="${2:-20260410}"
+REPORT_FLAG=""
+REPORT_DATE=""
+
+# 解析额外参数
+shift 2 2>/dev/null || true
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --report)
+            REPORT_FLAG="--report"
+            shift ;;
+        --report-date)
+            REPORT_DATE="$2"
+            shift 2 ;;
+        *)
+            shift ;;
+    esac
+done
 
 mkdir -p "$OUT_DIR"
 
 echo "=========================================="
 echo " 大盘趋势判断: 从小见大"
 echo " 日期范围: $START_DATE ~ $END_DATE"
+if [[ -n "$REPORT_FLAG" ]]; then
+    echo " 报告模式: ON"
+    [[ -n "$REPORT_DATE" ]] && echo " 报告日期: $REPORT_DATE"
+fi
 echo "=========================================="
 
 python -m src.strategy.market_trend.run_market_trend \
@@ -29,8 +50,11 @@ python -m src.strategy.market_trend.run_market_trend \
     --out_dir "$OUT_DIR" \
     --start_date "$START_DATE" \
     --end_date "$END_DATE" \
-    --workers 8
+    --workers 8 \
+    $REPORT_FLAG \
+    ${REPORT_DATE:+--report_date "$REPORT_DATE"}
 
 echo ""
 echo "结果输出: $OUT_DIR/"
 ls -lh "$OUT_DIR/"*.csv 2>/dev/null || true
+ls -lh "$OUT_DIR/"*.md 2>/dev/null || true

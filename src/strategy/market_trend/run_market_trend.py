@@ -70,6 +70,12 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--workers", type=int, default=8)
     p.add_argument("--min_bars", type=int, default=60)
 
+    # 报告
+    p.add_argument("--report", action="store_true",
+                   help="生成每日诊断报告 (Markdown)")
+    p.add_argument("--report_date", default="",
+                   help="报告日期 YYYYMMDD (空=最后一个交易日)")
+
     return p
 
 
@@ -99,6 +105,8 @@ def main() -> None:
         strong_down_threshold=args.strong_down_threshold,
         workers=args.workers,
         min_bars=args.min_bars,
+        report=args.report,
+        report_date=args.report_date,
     )
 
     run_market_trend_scan(cfg)

@@ -9,13 +9,28 @@
   5. 动量扩散 Momentum   — 行业动量离散 + 方向一致性
 """
 
-from dataclasses import dataclass
+from collections import defaultdict
+from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
 import numpy as np
 import pandas as pd
 
 from .config import MarketTrendConfig
+
+
+@dataclass
+class SectorFlow:
+    """板块资金流向快照"""
+    sector_name: str
+    stock_count: int
+    advance_count: int
+    advance_ratio: float
+    big_order_net: float        # 大单净额 (万元)
+    net_inflow_count: int       # 净流入股票数
+    net_inflow_ratio: float
+    avg_pct_chg: float          # 平均涨幅 (%)
+    avg_ret_20d: float          # 20 日平均收益
 
 
 @dataclass
@@ -48,6 +63,9 @@ class MicroSnapshot:
     # 动量
     sector_momentum_std: float  # 行业平均涨幅的标准差
     trend_alignment: float      # 涨跌方向与前 5 日一致的占比
+
+    # 板块资金流向
+    sector_flows: List[SectorFlow] = field(default_factory=list)
 
 
 def _permutation_entropy(x: np.ndarray, order: int = 3) -> float:
@@ -204,6 +222,12 @@ class MicroIndicatorEngine:
         alignment_total = 0
         total = 0
 
+        # 板块级别统计
+        _sec = defaultdict(lambda: {
+            'count': 0, 'advance': 0, 'big_order_net': 0.0,
+            'inflow_count': 0, 'pct_list': [], 'ret_20d_list': [],
+        })
+
         for symbol, df in stocks.items():
             # ST 过滤
             name = names_map.get(symbol, "")
@@ -263,6 +287,20 @@ class MicroIndicatorEngine:
                 if ts == r5s:
                     alignment_count += 1
 
+            # 板块统计
+            sd = _sec[industry]
+            sd['count'] += 1
+            if not np.isnan(pct) and pct > 0:
+                sd['advance'] += 1
+            if not np.isnan(bon):
+                sd['big_order_net'] += bon
+            if not np.isnan(mf) and mf > 0:
+                sd['inflow_count'] += 1
+            if not np.isnan(pct):
+                sd['pct_list'].append(pct)
+            if not np.isnan(r20):
+                sd['ret_20d_list'].append(r20)
+
         if total == 0:
             return None
 
@@ -317,6 +355,25 @@ class MicroIndicatorEngine:
         if ema_advance is not None:
             breadth_thrust = ema_advance > self.cfg.breadth_thrust_threshold
 
+        # 板块资金流向
+        sector_flows: List[SectorFlow] = []
+        for sec_name, sd in _sec.items():
+            if sec_name == "UNKNOWN" or sd['count'] < 3:
+                continue
+            sector_flows.append(SectorFlow(
+                sector_name=sec_name,
+                stock_count=sd['count'],
+                advance_count=sd['advance'],
+                advance_ratio=sd['advance'] / sd['count'],
+                big_order_net=sd['big_order_net'],
+                net_inflow_count=sd['inflow_count'],
+                net_inflow_ratio=sd['inflow_count'] / sd['count'],
+                avg_pct_chg=float(np.mean(sd['pct_list'])) if sd['pct_list'] else 0.0,
+                avg_ret_20d=float(np.mean(sd['ret_20d_list'])) if sd['ret_20d_list'] else 0.0,
+            ))
+        # 按大单净额排序
+        sector_flows.sort(key=lambda x: x.big_order_net, reverse=True)
+
         return MicroSnapshot(
             date=date,
             total_stocks=total,
@@ -335,4 +392,5 @@ class MicroIndicatorEngine:
             ordering_ratio=ordering_ratio,
             sector_momentum_std=sector_momentum_std,
             trend_alignment=trend_alignment,
+            sector_flows=sector_flows,
         )

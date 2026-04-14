@@ -81,6 +81,11 @@ class AgentState:
         pct = round(current / total * 100, 1) if total > 0 else 0.0
         self._data["progress"] = {"phase": phase, "current": current, "total": total, "pct": pct}
         self.save()
+        # Print sub-progress for supervisor visibility
+        if total > 0:
+            print(f"  [{self.agent_name}] {phase} {current}/{total} ({pct:.0f}%)", flush=True)
+        else:
+            print(f"  [{self.agent_name}] {phase}", flush=True)
 
     def get(self, key: str, default=None):
         return self._data.get(key, default)

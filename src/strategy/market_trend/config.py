@@ -91,6 +91,11 @@ class MarketTrendConfig:
     workers: int = 8
     min_bars: int = 60                   # 个股最少数据天数
 
+    # ---- 报告 ----
+    report: bool = False                 # 是否生成诊断报告
+    report_date: str = ""                # 报告日期 (空=最后一个交易日)
+    report_top_n: int = 10               # 板块 Top N
+
 
 @dataclass(frozen=True)
 class TrendState:

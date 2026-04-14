@@ -90,7 +90,7 @@ class DailyFinancialAgent(BaseAgent):
             fin_start = (datetime.strptime(today, "%Y%m%d") - timedelta(days=20)).strftime("%Y%m%d")
             fin_datasets = [d for d in FINANCIAL_DATASETS]
             for i, ds in enumerate(fin_datasets):
-                self.update_progress(f"financial_{ds}", i, len(fin_datasets))
+                self.update_progress(f"financial_{ds}", i + 1, len(fin_datasets))
                 update_financial_dataset(pro, self.data_dir, ds, symbols, fin_start, today, financial_limiter, financial_threads)
             self.update_progress("financial_done", len(fin_datasets), len(fin_datasets))
 

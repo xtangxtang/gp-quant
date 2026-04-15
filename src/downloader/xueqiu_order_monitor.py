@@ -106,9 +106,29 @@ class XueqiuSession:
 
     _WAF_KEYWORDS = ("Access Ver", "TIME: 20", "访问验证", "请完成验证", "Sorry, you")
 
-    def __init__(self):
+    DEFAULT_PROXIES = [
+        None,  # 直连 (无代理)
+        "http://child-prc.intel.com:913",
+        "http://proxy-dmz.intel.com:912",
+        "http://proxy-shz.intel.com:912",
+    ]
+
+    def __init__(self, proxies: list[str] | None = None):
         self.page = None
+        self._proxies = proxies or self.DEFAULT_PROXIES
+        self._proxy_idx = 0
         self._start_browser()
+
+    @property
+    def current_proxy(self) -> str | None:
+        return self._proxies[self._proxy_idx]
+
+    def rotate_proxy(self):
+        """切换到下一个代理"""
+        old = self.current_proxy or "直连"
+        self._proxy_idx = (self._proxy_idx + 1) % len(self._proxies)
+        new = self.current_proxy or "直连"
+        log.info(f"代理轮换: {old} → {new}")
 
     def _start_browser(self):
         if self.page is not None:
@@ -122,7 +142,11 @@ class XueqiuSession:
         co.set_argument("--no-sandbox")
         co.set_argument("--disable-dev-shm-usage")
         co.set_argument("--disable-gpu")
-        log.info("启动浏览器并初始化雪球会话 ...")
+        proxy = self.current_proxy
+        if proxy:
+            co.set_argument(f"--proxy-server={proxy}")
+        proxy_label = proxy or "直连"
+        log.info(f"启动浏览器 (代理: {proxy_label}) ...")
         self.page = ChromiumPage(co)
         self._init_session()
 
@@ -131,7 +155,11 @@ class XueqiuSession:
         time.sleep(5)
         log.info(f"雪球首页已加载: {self.page.title}")
 
-    def refresh_session(self, cooldown: float = 30):
+    def refresh_session(self, cooldown: float = 30, rotate: bool = False):
+        if rotate:
+            self.rotate_proxy()
+            # 换代理后冷却时间可以短 (新 IP 没被封)
+            cooldown = min(cooldown, 10)
         log.warning(f"WAF/限流 — 冷却 {cooldown}s 后重启浏览器 ...")
         time.sleep(cooldown)
         self._start_browser()
@@ -166,7 +194,7 @@ class XueqiuSession:
             except Exception as e:
                 last_err = e
                 if attempt < retries:
-                    backoff = [5, 30, 60][min(attempt, 2)]
+                    backoff = [15, 45, 90][min(attempt, 2)]
                     log.warning(
                         f"fetch_json 失败 (第{attempt+1}次, 等{backoff}s): {e}"
                     )

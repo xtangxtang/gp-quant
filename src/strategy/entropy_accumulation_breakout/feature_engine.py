@@ -63,6 +63,7 @@ from src.core.tick_entropy import (
     _discretize_trinary,
     _rolling_apply_1d,
 )
+from src.core.quantum_coherence import compute_quantum_coherence_features
 
 
 # ─────────────────────────────────────────────────────────
@@ -171,10 +172,9 @@ def compute_single_timeframe_features(
     vol_ma_l = vol.rolling(wl).mean()
     out["vol_shrink"] = vol.rolling(ws).mean() / vol_ma_l.replace(0, np.nan)
 
-    # ── 7) 价格突破特征 ──
+    # ── 7) 价格位置特征 (保留计算供其他模块使用) ──
     high_m = close.rolling(wm).max()
     low_m = close.rolling(wm).min()
-    out["breakout_up"] = (close >= high_m).astype(np.float64)
     out["breakout_range"] = (close - low_m) / (high_m - low_m).replace(0, np.nan)
 
     # ── 8) 资金流特征 (如果有) ──
@@ -198,6 +198,23 @@ def compute_single_timeframe_features(
     else:
         out["big_net_ratio"] = np.nan
         out["big_net_ratio_ma"] = np.nan
+
+    # ── 10) 量子相干性特征 (Quantum Coherence) ──
+    # 密度矩阵 + 退相干速率: 度量市场从"叠加"到"方向确认"的速度
+    if (
+        "perm_entropy_m" in out.columns
+        and "path_irrev_m" in out.columns
+        and "dom_eig_m" in out.columns
+    ):
+        qc = compute_quantum_coherence_features(
+            out["perm_entropy_m"],
+            out["path_irrev_m"],
+            out["dom_eig_m"],
+            rho_window=wm,
+            decay_window=w.get("accel", 5),
+        )
+        for col in qc.columns:
+            out[col] = qc[col].values
 
     return out
 

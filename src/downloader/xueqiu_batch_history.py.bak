@@ -1,0 +1,557 @@
+"""雪球讨论批量采集 + Wiki 生成 — 流水线模式 (抓一只立即生成 wiki)
+
+⚠️ 架构约定 (永久):
+  对每只股票: 爬取 → LLM 过滤 → Wiki 生成/更新, 全部完成后再处理下一只。
+  绝不先批量爬取再批量生成 wiki。
+
+两种运行模式:
+  history (默认):  一次性爬取能拿到的全部历史 → LLM 过滤 → Wiki
+  daily:           爬取今天的帖子 → LLM 过滤 → 合并到已有 wiki (适合 cron 调度)
+
+断点续传:
+  - 爬取阶段: raw/_history_posts.json 存在则跳过重爬
+  - 股票级别: _history_posts.json 已删 + wiki/log.md 存在 → 全部跳过
+
+用法:
+    # 单只
+    python -m src.downloader.xueqiu_batch_history --codes 600519
+
+    # 全量 A 股 (断点续传)
+    python -m src.downloader.xueqiu_batch_history \\
+        --stock-csv /nvme5/xtang/gp-workspace/gp-data/tushare_stock_basic.csv \\
+        --resume
+
+    # 每日增量 (cron 日调度)
+    python -m src.downloader.xueqiu_batch_history \\
+        --stock-csv /nvme5/xtang/gp-workspace/gp-data/tushare_stock_basic.csv \\
+        --daily --resume
+"""
+
+import argparse
+import json
+import logging
+import os
+import random
+import re
+import sys
+import time
+from collections import defaultdict
+from datetime import datetime, date
+from pathlib import Path
+
+from src.downloader.xueqiu_order_monitor import (
+    XueqiuSession,
+    _to_xueqiu_symbol,
+    _ts_to_date,
+    _parse_posts,
+    XUEQIU_STOCK_COMMENT_URL,
+    WIKI_PAGES,
+    SCHEMA_TEMPLATE,
+    DEFAULT_LLM_BASE_URL,
+    DEFAULT_LLM_MODEL,
+    LLMTooSlowError,
+    llm_filter_posts,
+    _prepare_posts_text,
+    _generate_wiki_page,
+    _generate_index,
+    _append_log,
+    _save_summary_md,
+    _load_codes_from_csv,
+    fetch_today_discussions,
+)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+)
+log = logging.getLogger(__name__)
+
+
+# ═══════════════════════════════════════════════════════════
+#  Phase 1: Historical Fetch
+# ═══════════════════════════════════════════════════════════
+
+def fetch_history_posts(
+    xq: XueqiuSession,
+    symbol: str,
+    start_date: date,
+    end_date: date,
+    page_size: int = 100,
+    max_pages: int = 2000,
+    delay: float = 2.0,
+) -> list[dict]:
+    """一次性爬取 [start_date, end_date] 区间所有讨论 (从新到旧分页)"""
+    all_posts = []
+    page_num = 1
+
+    while page_num <= max_pages:
+        url = (
+            f"{XUEQIU_STOCK_COMMENT_URL}?"
+            f"symbol={symbol}&count={page_size}&comment=0"
+            f"&page={page_num}&sort=time"
+        )
+        try:
+            data = xq.fetch_json(url)
+        except Exception as e:
+            log.warning(f"[{symbol}] 第 {page_num} 页请求失败: {e}")
+            break
+
+        statuses = data.get("list", [])
+        if not statuses:
+            break
+
+        past_range = False
+        for p in statuses:
+            post_date = _ts_to_date(p.get("created_at"))
+            if post_date is None:
+                continue
+            if post_date < start_date:
+                past_range = True
+                break
+            if post_date <= end_date:
+                all_posts.append(p)
+
+        if past_range:
+            break
+
+        page_num += 1
+        if page_num <= max_pages:
+            jitter = delay + random.uniform(1.0, delay)
+            time.sleep(jitter)
+
+        if page_num % 20 == 0:
+            log.info(
+                f"  [{symbol}] 已爬 {page_num} 页, "
+                f"收集 {len(all_posts)} 条"
+            )
+
+    log.info(
+        f"[{symbol}] 历史爬取: {start_date}~{end_date}, "
+        f"{len(all_posts)} 条, {page_num} 页"
+    )
+    return all_posts
+
+
+# ═══════════════════════════════════════════════════════════
+#  Wiki Generation Helper
+# ═══════════════════════════════════════════════════════════
+
+def _do_filter_and_wiki(
+    symbol: str,
+    posts: list[dict],
+    data_date: str,
+    stock_dir: Path,
+    llm_base_url: str,
+    llm_model: str,
+    llm_api_key: str,
+    llm_timeout: float,
+) -> dict:
+    """LLM 过滤 + Wiki 生成/更新 (两个 process 函数共用)"""
+    raw_dir = stock_dir / "raw"
+    wiki_dir = stock_dir / "wiki"
+    schema_path = stock_dir / "SCHEMA.md"
+    date_key = data_date.replace("-", "")
+    filtered_cache = raw_dir / f"{date_key}_filtered.json"
+
+    # ── LLM 过滤 (有缓存则跳过) ──────────────────────
+    if filtered_cache.exists():
+        with open(filtered_cache, encoding="utf-8") as f:
+            filtered = json.load(f)
+        log.info(f"[{symbol}] 加载过滤缓存: {len(filtered)} 条")
+    else:
+        try:
+            filtered = llm_filter_posts(
+                posts, llm_base_url, llm_model, llm_api_key,
+                batch_timeout=llm_timeout,
+            )
+        except LLMTooSlowError as e:
+            log.warning(f"[{symbol}] LLM 太慢 ({e}), 仅保留爬取结果")
+            return {"symbol": symbol, "status": "crawled", "total": len(posts)}
+
+        if not filtered:
+            log.info(f"[{symbol}] 无基本面相关帖子")
+            return {"symbol": symbol, "status": "ok", "total": len(posts), "filtered": 0}
+
+        log.info(f"[{symbol}] 过滤: {len(posts)} → {len(filtered)} 条")
+
+        # 保存过滤结果 JSON + 摘要 MD
+        with open(filtered_cache, "w", encoding="utf-8") as f:
+            json.dump(filtered, f, ensure_ascii=False)
+        _save_summary_md(
+            raw_dir, date_key, symbol,
+            data_date, posts, filtered,
+        )
+
+    # ── Wiki 生成 ─────────────────────────────────────
+    wiki_dir.mkdir(parents=True, exist_ok=True)
+    if not schema_path.exists():
+        schema_path.write_text(
+            SCHEMA_TEMPLATE.format(symbol=symbol), encoding="utf-8",
+        )
+
+    posts_text = _prepare_posts_text(filtered)
+    pages_updated = []
+
+    for page_name, page_def in WIKI_PAGES.items():
+        page_path = wiki_dir / f"{page_name}.md"
+        existing = (
+            page_path.read_text(encoding="utf-8")
+            if page_path.exists()
+            else None
+        )
+        try:
+            content = _generate_wiki_page(
+                page_name, page_def, symbol, data_date,
+                posts_text, existing,
+                llm_base_url, llm_model, llm_api_key,
+            )
+            page_path.write_text(content, encoding="utf-8")
+            pages_updated.append(page_name)
+        except Exception as e:
+            log.error(f"  [wiki] {page_name}.md 生成失败: {e}")
+
+    if pages_updated:
+        idx = _generate_index(symbol, wiki_dir, data_date)
+        (wiki_dir / "index.md").write_text(idx, encoding="utf-8")
+        _append_log(
+            wiki_dir / "log.md", symbol, data_date,
+            len(posts), len(filtered), pages_updated,
+        )
+
+    log.info(
+        f"[{symbol}] Wiki 完成: {len(filtered)} 条, "
+        f"{len(pages_updated)}/{len(WIKI_PAGES)} 页"
+    )
+    return {
+        "symbol": symbol, "status": "ok",
+        "total": len(posts), "filtered": len(filtered),
+        "pages": len(pages_updated),
+    }
+
+
+# ═══════════════════════════════════════════════════════════
+#  Stock Processing Pipeline
+# ═══════════════════════════════════════════════════════════
+
+def process_stock_history(
+    code: str,
+    xq: XueqiuSession,
+    start_date: date,
+    end_date: date,
+    llm_base_url: str = DEFAULT_LLM_BASE_URL,
+    llm_model: str = DEFAULT_LLM_MODEL,
+    llm_api_key: str = "",
+    output_dir: str = "results/xueqiu_orders",
+    page_delay: float = 2.0,
+    llm_timeout: float = 90.0,
+    crawl_only: bool = False,
+) -> dict:
+    """处理单只股票: 爬取全部历史 [→ LLM 过滤 → Wiki 生成]"""
+    symbol = _to_xueqiu_symbol(code)
+    log.info(f"{'='*50}")
+    log.info(f"处理 {symbol}: {start_date} ~ {end_date}")
+
+    stock_dir = Path(output_dir) / symbol
+    raw_dir = stock_dir / "raw"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+
+    # ── Phase 1: Crawl & Parse ──────────────────────────
+    history_path = raw_dir / "_history_posts.json"
+
+    if history_path.exists():
+        log.info(f"  加载已有历史缓存 ...")
+        with open(history_path, encoding="utf-8") as f:
+            posts = json.load(f)
+        log.info(f"  {len(posts)} 条已解析帖子")
+    else:
+        raw_posts = fetch_history_posts(
+            xq, symbol, start_date, end_date, delay=page_delay,
+        )
+        if not raw_posts:
+            log.info(f"[{symbol}] 无历史讨论")
+            return {"symbol": symbol, "status": "no_data", "total": 0}
+
+        posts = _parse_posts(raw_posts)
+        with open(history_path, "w", encoding="utf-8") as f:
+            json.dump(posts, f, ensure_ascii=False)
+        log.info(f"  缓存 {len(posts)} 条 → _history_posts.json")
+
+    if crawl_only:
+        log.info(f"[{symbol}] 爬取完成 ({len(posts)} 条)")
+        return {"symbol": symbol, "status": "crawled", "total": len(posts)}
+
+    # ── Phase 2: LLM Filter + Wiki ──────────────────────
+    data_date = str(end_date)
+    result = _do_filter_and_wiki(
+        symbol, posts, data_date, stock_dir,
+        llm_base_url, llm_model, llm_api_key, llm_timeout,
+    )
+
+    # 成功后删除爬取缓存
+    if result.get("status") == "ok" and history_path.exists():
+        history_path.unlink()
+        log.info(f"  已删除缓存 _history_posts.json")
+
+    return result
+
+
+# ═══════════════════════════════════════════════════════════
+#  Daily Mode: 爬当天 → 合并到已有 wiki
+# ═══════════════════════════════════════════════════════════
+
+def process_stock_daily(
+    code: str,
+    xq: XueqiuSession,
+    target_date: date | None = None,
+    llm_base_url: str = DEFAULT_LLM_BASE_URL,
+    llm_model: str = DEFAULT_LLM_MODEL,
+    llm_api_key: str = "",
+    output_dir: str = "results/xueqiu_orders",
+    page_delay: float = 2.0,
+    llm_timeout: float = 90.0,
+    crawl_only: bool = False,
+) -> dict:
+    """每日增量: 爬取当天帖子 → LLM 过滤 → 合并到已有 wiki"""
+    symbol = _to_xueqiu_symbol(code)
+    target = target_date or date.today()
+    today_str = target.strftime("%Y%m%d")
+    data_date = str(target)
+
+    stock_dir = Path(output_dir) / symbol
+    raw_dir = stock_dir / "raw"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+
+    # Resume check
+    log_md = stock_dir / "wiki" / "log.md"
+    if log_md.exists():
+        content = log_md.read_text(encoding="utf-8")
+        if f"[{data_date}]" in content:
+            log.info(f"[{symbol}] {today_str} 已处理, 跳过")
+            return {"symbol": symbol, "status": "resumed"}
+
+    # Crawl
+    raw_posts = fetch_today_discussions(
+        xq, symbol, delay=page_delay, target_date=target,
+    )
+    if not raw_posts:
+        log.info(f"[{symbol}] {data_date} 无讨论")
+        return {"symbol": symbol, "status": "no_data"}
+
+    posts = _parse_posts(raw_posts)
+    log.info(f"[{symbol}] {data_date}: {len(posts)} 条")
+
+    # 保存原始 JSON
+    json_path = raw_dir / f"{today_str}.json"
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(posts, f, ensure_ascii=False)
+
+    if crawl_only:
+        return {"symbol": symbol, "status": "crawled", "total": len(posts)}
+
+    # LLM Filter + Wiki
+    return _do_filter_and_wiki(
+        symbol, posts, data_date, stock_dir,
+        llm_base_url, llm_model, llm_api_key, llm_timeout,
+    )
+
+
+# ═══════════════════════════════════════════════════════════
+#  Main
+# ═══════════════════════════════════════════════════════════
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="雪球历史讨论批量采集 + Wiki 生成 (流水线: 爬取→过滤→Wiki)",
+    )
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("--codes", help="股票代码, 逗号分隔")
+    group.add_argument("--stock-csv", help="股票列表 CSV (含 symbol 列)")
+    parser.add_argument(
+        "--start-date", default=None,
+        help="起始日期 YYYYMMDD (默认尽量远, 拉取 API 能提供的全部)",
+    )
+    parser.add_argument(
+        "--end-date", default=None,
+        help="结束日期 YYYYMMDD (默认今天)",
+    )
+    parser.add_argument(
+        "--daily", action="store_true",
+        help="每日增量模式: 只爬当天数据, 合并到已有 wiki",
+    )
+    parser.add_argument("--llm-base-url", default=DEFAULT_LLM_BASE_URL)
+    parser.add_argument("--llm-model", default=DEFAULT_LLM_MODEL)
+    parser.add_argument("--llm-api-key", default="")
+    parser.add_argument("--llm-timeout", type=float, default=90.0,
+                        help="LLM 单批次超时秒数")
+    parser.add_argument(
+        "--output-dir",
+        default="/nvme5/xtang/gp-workspace/gp-data/xueqiu_orders",
+    )
+    parser.add_argument("--page-delay", type=float, default=2.0,
+                        help="翻页延迟秒数")
+    parser.add_argument(
+        "--resume", action="store_true",
+        help="跳过已完成的股票 (无缓存 + 有 wiki/log.md)",
+    )
+    parser.add_argument(
+        "--crawl-only", action="store_true",
+        help="仅爬取保存 JSON, 不调 LLM",
+    )
+    parser.add_argument("--limit", type=int, default=0,
+                        help="最多处理 N 只股票 (0=不限)")
+    args = parser.parse_args()
+
+    api_key = (
+        args.llm_api_key
+        or os.environ.get("DASHSCOPE_API_KEY", "")
+        or os.environ.get("OPENAI_API_KEY", "")
+    )
+    if not api_key and not args.crawl_only:
+        log.error("需要 LLM API Key (--llm-api-key 或 DASHSCOPE_API_KEY 环境变量), 或使用 --crawl-only")
+        sys.exit(1)
+
+    if args.stock_csv:
+        codes = _load_codes_from_csv(args.stock_csv)
+        log.info(f"从 CSV 加载 {len(codes)} 只股票")
+    else:
+        codes = [c.strip() for c in args.codes.split(",") if c.strip()]
+
+    if not codes:
+        log.error("无股票代码")
+        sys.exit(1)
+
+    start = (
+        datetime.strptime(args.start_date, "%Y%m%d").date()
+        if args.start_date
+        else date(2020, 1, 1)
+    )
+    end = (
+        datetime.strptime(args.end_date, "%Y%m%d").date()
+        if args.end_date
+        else date.today()
+    )
+
+    daily_mode = args.daily
+    if daily_mode:
+        # 每日模式: 只处理 end_date (默认今天)
+        target_date = end
+        log.info(f"模式: 每日增量 | 目标日期: {target_date}")
+    else:
+        log.info(f"模式: 历史全量 | 日期范围: {start} ~ {end}")
+
+    if args.limit > 0:
+        codes = codes[:args.limit]
+
+    log.info(f"股票数: {len(codes)}, crawl_only={args.crawl_only}")
+
+    xq = XueqiuSession()
+
+    stats = defaultdict(int)
+    consecutive_empty = 0
+    WAF_THRESHOLD = 5
+    waf_cooldown = 120
+
+    try:
+        for i, code in enumerate(codes):
+            sym = _to_xueqiu_symbol(code)
+
+            # Stock-level resume
+            if args.resume and not daily_mode:
+                stock_dir = Path(args.output_dir) / sym
+                history_cache = stock_dir / "raw" / "_history_posts.json"
+                log_md = stock_dir / "wiki" / "log.md"
+                if args.crawl_only:
+                    # crawl-only: 有缓存就跳过
+                    if history_cache.exists():
+                        stats["resumed"] += 1
+                        if stats["resumed"] % 100 == 0:
+                            log.info(f"已跳过 {stats['resumed']} 只")
+                        continue
+                else:
+                    # 完整模式: 有 wiki/log.md 就跳过 (已完成)
+                    if log_md.exists():
+                        stats["resumed"] += 1
+                        if stats["resumed"] % 100 == 0:
+                            log.info(f"已跳过 {stats['resumed']} 只")
+                        continue
+
+            # 股票间延迟 (5~10s 随机, 跳过的不算)
+            if i > 0:
+                gap = random.uniform(5.0, 10.0)
+                time.sleep(gap)
+
+            try:
+                if daily_mode:
+                    result = process_stock_daily(
+                        code, xq,
+                        target_date=target_date,
+                        llm_base_url=args.llm_base_url,
+                        llm_model=args.llm_model,
+                        llm_api_key=api_key,
+                        output_dir=args.output_dir,
+                        page_delay=args.page_delay,
+                        llm_timeout=args.llm_timeout,
+                        crawl_only=args.crawl_only,
+                    )
+                else:
+                    result = process_stock_history(
+                        code, xq,
+                        start_date=start,
+                        end_date=end,
+                        llm_base_url=args.llm_base_url,
+                        llm_model=args.llm_model,
+                        llm_api_key=api_key,
+                        output_dir=args.output_dir,
+                        page_delay=args.page_delay,
+                        llm_timeout=args.llm_timeout,
+                        crawl_only=args.crawl_only,
+                    )
+                status = result.get("status", "fail")
+                stats[status] += 1
+
+                if status in ("ok", "crawled"):
+                    consecutive_empty = 0
+                    waf_cooldown = 120
+                    # 爬取量大时额外冷却, 防止连续翻页后立即请求下一只触发 WAF
+                    total = result.get("total", 0)
+                    if total > 200:
+                        cool = random.uniform(30, 60)
+                        log.info(f"  帖子多 ({total}), 额外冷却 {cool:.0f}s")
+                        time.sleep(cool)
+                elif status == "no_data":
+                    consecutive_empty += 1
+                else:
+                    consecutive_empty += 1
+            except Exception as e:
+                log.error(f"[{code}] 异常: {e}")
+                stats["fail"] += 1
+                consecutive_empty += 1
+
+            # WAF cooldown
+            if consecutive_empty >= WAF_THRESHOLD:
+                log.warning(
+                    f"连续 {consecutive_empty} 只无数据, "
+                    f"冷却 {waf_cooldown}s ..."
+                )
+                xq.refresh_session(cooldown=waf_cooldown)
+                waf_cooldown = min(waf_cooldown * 2, 600)
+                consecutive_empty = 0
+
+            done = i + 1
+            if done % 10 == 0 or done == len(codes):
+                log.info(
+                    f"进度: {done}/{len(codes)} | "
+                    + " | ".join(
+                        f"{k}: {v}" for k, v in sorted(stats.items())
+                    )
+                )
+    finally:
+        xq.close()
+
+    log.info(
+        f"\n全部完成: {len(codes)} 只\n"
+        + "\n".join(f"  {k}: {v}" for k, v in sorted(stats.items()))
+    )
+
+
+if __name__ == "__main__":
+    main()

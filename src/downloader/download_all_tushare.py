@@ -115,7 +115,8 @@ def save_csv(df: pd.DataFrame, path: str, sort_col: str | None = None, append: b
         old = pd.read_csv(path)
         if sort_col and sort_col in old.columns:
             old[sort_col] = pd.to_numeric(old[sort_col], errors='coerce')
-        merged = pd.concat([old, df], ignore_index=True).drop_duplicates()
+        frames = [f.dropna(axis=1, how='all') for f in [old, df] if not f.empty]
+        merged = pd.concat(frames, ignore_index=True).drop_duplicates() if frames else old
         if sort_col and sort_col in merged.columns:
             merged[sort_col] = pd.to_numeric(merged[sort_col], errors='coerce')
             merged = merged.sort_values(sort_col, ascending=True)

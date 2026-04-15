@@ -1,5 +1,6 @@
 import argparse
 import importlib
+import logging
 import re
 import subprocess
 import sys
@@ -20,11 +21,13 @@ STRATEGY_LABELS = {
   "entropy_bifurcation_setup": "熵分叉启动",
   "uptrend_hold_state_flow": "上升趋势持有状态图",
   "continuous_decline_recovery": "连续下跌修复买点",
+  "entropy_accumulation_breakout": "熵惜售分岔突破",
 }
 STRATEGY_TAGLINES = {
   "entropy_bifurcation_setup": "用市场门控、低熵压缩、分叉触发和分段执行去筛选启动股。",
   "uptrend_hold_state_flow": "把上升趋势里的熵秩序持有、快速扩张持有、快速扩张衰竭退出放进一张状态图里，从买点开始评估整段持有路径。",
   "continuous_decline_recovery": "在连续下跌后的第一段修复里，先定市场买点，再排领先行业，最后选最先完成修复的股票。",
+  "entropy_accumulation_breakout": "基于信息熵、路径不可逆性、临界减速与量子相干性的三阶段系统：惜售吸筹（叠加态）→ 分岔突破（坍缩）→ 结构崩塌（退相干）。纯理论驱动，无传统技术指标。",
 }
 STRATEGY_VARIANT_LABELS = {
   "compression_breakout": "低熵压缩突破",
@@ -1292,6 +1295,7 @@ APP_HTML = """<!doctype html>
         <div class="pill">README 解析展示</div>
         <div class="pill">参数可编辑</div>
         <div class="pill">点击即可应用策略</div>
+        <a href="/quantum" class="pill" style="text-decoration:none;background:rgba(45,212,191,0.18);border-color:rgba(45,212,191,0.36);cursor:pointer;">⚛ 量子态扫描</a>
       </div>
     </section>
 
@@ -1545,12 +1549,17 @@ APP_HTML = """<!doctype html>
 
       (detail.parameters || []).forEach((param) => {
         state.defaults[param.dest] = param.value;
+        if (param.hidden) return;
         const wrapper = document.createElement('div');
         wrapper.className = 'field';
 
         const label = document.createElement('label');
         label.setAttribute('for', `param-${param.dest}`);
-        label.textContent = param.label;
+        const labelParts = [];
+        if (param.help_text) labelParts.push(param.help_text);
+        else labelParts.push(param.label);
+        if (param.required) labelParts.push(' *');
+        label.textContent = labelParts.join('');
         wrapper.appendChild(label);
 
         if (param.kind === 'boolean') {
@@ -1586,6 +1595,7 @@ APP_HTML = """<!doctype html>
           textarea.id = `param-${param.dest}`;
           textarea.name = param.dest;
           textarea.value = param.value == null ? '' : String(param.value);
+          textarea.placeholder = param.default_display ? `默认: ${param.default_display}` : '';
           wrapper.appendChild(textarea);
         } else {
           const input = document.createElement('input');
@@ -1595,17 +1605,16 @@ APP_HTML = """<!doctype html>
           if (param.kind === 'integer') input.step = '1';
           if (param.kind === 'float') input.step = '0.01';
           input.value = param.value == null ? '' : String(param.value);
+          input.placeholder = param.default_display ? `默认: ${param.default_display}` : '';
           wrapper.appendChild(input);
         }
 
-        const meta = [];
-        if (param.required) meta.push('必填');
-        if (param.default_display) meta.push(`默认: ${param.default_display}`);
-        if (param.option_strings && param.option_strings.length) meta.push(param.option_strings.join(' / '));
-        if (param.help_text) meta.push(param.help_text);
+        const helpParts = [];
+        if (param.default_display) helpParts.push(`默认值: ${param.default_display}`);
+        helpParts.push(param.label);
 
         const help = document.createElement('small');
-        help.textContent = meta.join(' | ');
+        help.textContent = helpParts.join(' · ');
         wrapper.appendChild(help);
         host.appendChild(wrapper);
       });
@@ -2144,6 +2153,8 @@ APP_HTML = """<!doctype html>
         ? ['symbol', 'name', 'start_date', 'scan_date', 'judgement', 'strategy_state', 'strategy_score', 'disorder_pressure', 'first_exit_date', 'holding_return_pct']
         : strategyId.includes('continuous_decline_recovery')
         ? ['symbol', 'name', 'industry', 'market_buy_state', 'sector_rank', 'sector_score', 'strategy_score', 'damage_score', 'repair_score', 'entry_window_score', 'flow_support_score', 'rebound_from_low_10', 'relative_strength_vs_sector_5', 'entry_mode']
+        : strategyId.includes('entropy_accumulation_breakout')
+        ? ['symbol', 'name', 'industry', 'phase', 'composite_score', 'accum_quality', 'bifurc_quality', 'perm_entropy_m', 'path_irrev_m', 'dom_eig_m', 'coherence_l1', 'purity_norm', 'coherence_decay_rate', 'von_neumann_entropy']
         : isEntropyStrategy(strategyId)
         ? ['symbol', 'name', 'industry', 'market', 'market_phase_state', 'strategy_state', 'context_score', 'stock_state_score', 'strategy_score', 'entropy_quality', 'bifurcation_quality', 'trigger_quality', 'execution_readiness_score', 'execution_penalty_score', 'abandonment_score', 'entry_mode', 'position_scale']
         : ['symbol', 'name', 'industry', 'market', 'strategy_score', 'resonance_score', 'support_count', 'energy_term', 'amount', 'turnover_rate'];
@@ -2364,8 +2375,17 @@ def _extract_tagline(description_text: str) -> str:
 def _extract_readme_metadata(readme_path: Path) -> dict[str, Any]:
     text = _read_text(readme_path)
     sections = _section_map(text)
-    description_text = sections.get("描述", "")
-    parameter_text = sections.get("主要参数", "")
+    # 支持多种 section 标题写法
+    description_text = ""
+    for key in ("描述", "1. 策略总览", "策略总览", "概述", "Overview"):
+        if key in sections:
+            description_text = sections[key]
+            break
+    parameter_text = ""
+    for key in ("主要参数", "9. 参数说明", "参数说明", "参数", "Parameters"):
+        if key in sections:
+            parameter_text = sections[key]
+            break
     return {
         "description_text": description_text,
         "parameter_text": parameter_text,
@@ -2437,6 +2457,14 @@ def _infer_kind(action: argparse.Action) -> str:
     if action.type is float:
         return "float"
     return "string"
+
+
+# 在 web 表单中隐藏的参数 — 用默认值自动填充，不需要用户手动配置
+HIDDEN_PARAM_DESTS = {
+    "data_dir", "out_dir", "basic_path", "index_path",
+    "lookback_days", "min_amount", "min_turnover",
+    "exclude_st", "verbose",
+}
 
 
 def _default_value_for_dest(strategy_id: str, dest: str) -> Any:
@@ -2519,6 +2547,7 @@ def _parameter_definitions(entrypoint_path: Path, strategy_id: str, readme_help:
                 "choices": list(primary.choices) if primary.choices else [],
                 "help_text": help_text,
                 "bool_map": bool_map,
+                "hidden": dest in HIDDEN_PARAM_DESTS,
             }
         )
     return params
@@ -2609,8 +2638,9 @@ def _strategy_index() -> dict[str, dict[str, Any]]:
 
 def _scan_dates(output_dir: Path) -> list[str]:
     dates: list[str] = []
-    for path in output_dir.glob("market_scan_snapshot_*.csv"):
-        dates.append(path.stem.rsplit("_", 1)[-1])
+    for pattern in ["market_scan_snapshot_*.csv", "market_snapshot_*.csv"]:
+        for path in output_dir.glob(pattern):
+            dates.append(path.stem.rsplit("_", 1)[-1])
     return sorted(set(dates), reverse=True)
 
 
@@ -2624,8 +2654,14 @@ def _find_existing(output_dir: Path, patterns: list[str]) -> Path | None:
 
 def _load_bundle(output_dir: Path, scan_date: str) -> dict[str, pd.DataFrame]:
     summary_path = _find_existing(output_dir, [f"resonance_summary_{scan_date}.csv", f"strategy_summary_*_{scan_date}.csv"])
-    selected_path = _find_existing(output_dir, [f"selected_portfolio_{scan_date}_top*.csv", f"selected_portfolio_*_{scan_date}_top*.csv"])
-    candidates_path = _find_existing(output_dir, [f"resonance_candidates_{scan_date}_all.csv", f"*_candidates_{scan_date}_all.csv"])
+    selected_path = _find_existing(output_dir, [
+        f"selected_portfolio_{scan_date}_top*.csv", f"selected_portfolio_*_{scan_date}_top*.csv",
+        f"breakout_candidates_{scan_date}.csv",
+    ])
+    candidates_path = _find_existing(output_dir, [
+        f"resonance_candidates_{scan_date}_all.csv", f"*_candidates_{scan_date}_all.csv",
+        f"market_snapshot_{scan_date}.csv",
+    ])
     backtest_summary_path = _find_existing(output_dir, [f"forward_backtest_summary_{scan_date}.csv", f"forward_backtest_summary_*_{scan_date}.csv"])
     return {
         "summary": _read_csv(summary_path) if summary_path else pd.DataFrame(),
@@ -2674,6 +2710,19 @@ def _serialize_strategy_detail(strategy: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _normalize_date_value(value: str) -> str:
+    """Normalize date strings like '2025/01/01' or '2025-01-01' to 'YYYYMMDD'."""
+    stripped = value.strip()
+    if not stripped:
+        return stripped
+    for sep in ("/", "-"):
+        if sep in stripped:
+            parts = stripped.split(sep)
+            if len(parts) == 3 and all(p.isdigit() for p in parts):
+                return f"{int(parts[0]):04d}{int(parts[1]):02d}{int(parts[2]):02d}"
+    return stripped
+
+
 def _build_command(strategy: dict[str, Any], values: dict[str, Any]) -> tuple[list[str], str, Path]:
     command = [sys.executable, str(strategy["entrypoint_path"])]
     effective_values = {**strategy.get("fixed_values", {}), **dict(values)}
@@ -2699,6 +2748,11 @@ def _build_command(strategy: dict[str, Any], values: dict[str, Any]) -> tuple[li
         if value is None:
             value = ""
         value_str = str(value)
+
+        # 日期参数自动归一化为 YYYYMMDD
+        if dest.endswith("_date"):
+            value_str = _normalize_date_value(value_str)
+
         if not value_str.strip() and not param.get("required"):
             continue
         option = param["option_strings"][0] if param["option_strings"] else f"--{dest}"
@@ -3205,6 +3259,482 @@ def _strategy_focus_payload(
   return None
 
 
+# ═════════════════════════════════════════════════════════
+# 量子态扫描 helpers
+# ═════════════════════════════════════════════════════════
+
+_quantum_logger = logging.getLogger("quantum_scan")
+
+PHASE_LABELS_QUANTUM = {
+    "breakout": "坍缩 (Collapse)",
+    "accumulation": "叠加态 (Superposition)",
+    "idle": "退相干 (Decoherence)",
+}
+
+
+def _quantum_scan_market(top_n: int = 50, scan_date: str = "") -> list[dict]:
+    """全市场量子态扫描, 返回按 composite_score 降序排列的结果."""
+    from src.strategy.entropy_accumulation_breakout.scan_service import (
+        ScanConfig,
+        _load_basic_info,
+        _load_daily,
+        _resolve_symbols,
+        _should_skip,
+        scan_single_symbol,
+    )
+
+    data_dir = str(DEFAULT_DATA_DIR)
+    basic_path = str(DEFAULT_BASIC_PATH)
+    cfg = ScanConfig(data_dir=data_dir, basic_path=basic_path, scan_date=scan_date, top_n=top_n)
+    basic_info = _load_basic_info(basic_path)
+    symbols = _resolve_symbols(data_dir, None)
+
+    scan_dt = cfg.scan_date
+    if not scan_dt:
+        for sym in symbols[:10]:
+            df = _load_daily(data_dir, sym)
+            if df is not None and len(df) > 0:
+                scan_dt = str(df["trade_date"].iloc[-1])
+                break
+
+    results = []
+    for sym in symbols:
+        sig = scan_single_symbol(data_dir, sym, cfg, scan_dt, basic_info)
+        if sig is None:
+            continue
+        row = {
+            "symbol": sig.symbol,
+            "name": sig.details.get("name", ""),
+            "industry": sig.details.get("industry", ""),
+            "trade_date": sig.trade_date,
+            "phase": sig.phase,
+            "phase_label": PHASE_LABELS_QUANTUM.get(sig.phase, sig.phase),
+            "accum_quality": sig.accum_quality,
+            "bifurc_quality": sig.bifurc_quality,
+            "composite_score": sig.composite_score,
+            "entry_signal": sig.entry_signal,
+            "perm_entropy": sig.details.get("perm_entropy_m"),
+            "path_irrev": sig.details.get("path_irrev_m"),
+            "dom_eig": sig.details.get("dom_eig_m"),
+            "coherence_l1": sig.details.get("coherence_l1"),
+            "purity": sig.details.get("purity_norm"),
+            "coherence_decay_rate": sig.details.get("coherence_decay_rate"),
+            "von_neumann_entropy": sig.details.get("von_neumann_entropy"),
+        }
+        results.append(row)
+
+    results.sort(key=lambda r: r.get("composite_score") or 0, reverse=True)
+    return results[:top_n], scan_dt
+
+
+def _quantum_scan_single(symbol: str, scan_date: str = "") -> dict | None:
+    """单只股票量子态查询."""
+    from src.strategy.entropy_accumulation_breakout.scan_service import (
+        ScanConfig,
+        _load_basic_info,
+        _load_daily,
+        scan_single_symbol,
+    )
+
+    data_dir = str(DEFAULT_DATA_DIR)
+    basic_path = str(DEFAULT_BASIC_PATH)
+    cfg = ScanConfig(data_dir=data_dir, basic_path=basic_path, scan_date=scan_date)
+    basic_info = _load_basic_info(basic_path)
+
+    # 标准化 symbol
+    sym = symbol.strip().lower()
+    if not sym:
+        return None
+
+    scan_dt = scan_date
+    if not scan_dt:
+        df_tmp = _load_daily(data_dir, sym)
+        if df_tmp is not None and len(df_tmp) > 0:
+            scan_dt = str(df_tmp["trade_date"].iloc[-1])
+        else:
+            return None
+
+    sig = scan_single_symbol(data_dir, sym, cfg, scan_dt, basic_info)
+    if sig is None:
+        return None
+
+    return {
+        "symbol": sig.symbol,
+        "name": sig.details.get("name", ""),
+        "industry": sig.details.get("industry", ""),
+        "trade_date": sig.trade_date,
+        "phase": sig.phase,
+        "phase_label": PHASE_LABELS_QUANTUM.get(sig.phase, sig.phase),
+        "accum_quality": sig.accum_quality,
+        "bifurc_quality": sig.bifurc_quality,
+        "composite_score": sig.composite_score,
+        "entry_signal": sig.entry_signal,
+        "perm_entropy": sig.details.get("perm_entropy_m"),
+        "path_irrev": sig.details.get("path_irrev_m"),
+        "dom_eig": sig.details.get("dom_eig_m"),
+        "vol_impulse": sig.details.get("vol_impulse"),
+        "entropy_accel": sig.details.get("entropy_accel"),
+        "coherence_l1": sig.details.get("coherence_l1"),
+        "purity": sig.details.get("purity_norm"),
+        "coherence_decay_rate": sig.details.get("coherence_decay_rate"),
+        "von_neumann_entropy": sig.details.get("von_neumann_entropy"),
+    }
+
+
+QUANTUM_HTML = """<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>量子态扫描 — gp-quant</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --paper: #09131a;
+      --ink: #e9f4ef;
+      --muted: #93a9b2;
+      --line: rgba(121, 164, 173, 0.18);
+      --card: rgba(11, 19, 26, 0.96);
+      --accent: #2dd4bf;
+      --accent-strong: #9af2dd;
+      --warm: #f6b85f;
+      --good: #5be38c;
+      --bad: #ff7a7a;
+      --shadow: 0 28px 90px rgba(0, 0, 0, 0.42);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh; color: var(--ink);
+      background:
+        radial-gradient(circle at 14% 18%, rgba(246, 184, 95, 0.13), transparent 18%),
+        radial-gradient(circle at 86% 8%, rgba(45, 212, 191, 0.12), transparent 22%),
+        linear-gradient(180deg, #071017 0%, #09141b 42%, #061017 100%);
+      font-family: "IBM Plex Serif", "Noto Serif SC", Georgia, serif;
+    }
+    .shell { max-width: 1480px; margin: 0 auto; padding: 24px 18px 44px; }
+    .hero {
+      background: var(--card); border: 1px solid var(--line);
+      border-radius: 28px; box-shadow: var(--shadow);
+      padding: 26px 24px 22px; margin-bottom: 18px; position: relative; overflow: hidden;
+    }
+    .hero::after {
+      content: ""; position: absolute; right: -20px; top: -26px;
+      width: 170px; height: 170px; border-radius: 50%;
+      background: radial-gradient(circle, rgba(45, 212, 191, 0.18), transparent 70%);
+      pointer-events: none;
+    }
+    .eyebrow { margin-bottom: 10px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.18em; color: var(--warm); }
+    h1 { margin: 0 0 12px; font-size: clamp(34px, 5vw, 52px); line-height: 0.96; }
+    .hero-copy { color: var(--muted); font-size: 15px; line-height: 1.7; max-width: 680px; }
+    .status-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+    .pill {
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 6px 12px; border-radius: 999px; font-size: 12px;
+      background: rgba(8, 16, 22, 0.72); border: 1px solid var(--line); color: var(--ink);
+    }
+    .pill-link { text-decoration: none; cursor: pointer; transition: border-color 180ms; }
+    .pill-link:hover { border-color: var(--accent); }
+
+    .controls {
+      display: flex; flex-wrap: wrap; gap: 12px; align-items: center;
+      margin-bottom: 18px;
+    }
+    .controls input, .controls select {
+      font: inherit; color: var(--ink);
+      background: rgba(5, 12, 17, 0.88); border: 1px solid rgba(121, 164, 173, 0.32);
+      border-radius: 12px; padding: 10px 14px; font-size: 14px;
+    }
+    .controls input { width: 200px; }
+    .controls input::placeholder { color: rgba(147, 169, 178, 0.72); }
+    .controls select { width: 120px; }
+    button {
+      font: inherit; cursor: pointer; border-radius: 999px; padding: 10px 18px; border: 0;
+      transition: transform 180ms ease, opacity 180ms ease;
+    }
+    button:hover { transform: translateY(-1px); }
+    button:disabled { cursor: not-allowed; opacity: 0.6; transform: none; }
+    .btn-primary {
+      background: linear-gradient(135deg, #169f90, #2dd4bf); color: #041014;
+      box-shadow: 0 10px 24px rgba(45, 212, 191, 0.22);
+    }
+    .btn-secondary {
+      background: rgba(10, 18, 24, 0.92); color: var(--ink); border: 1px solid var(--line);
+    }
+    .status-text { color: var(--muted); font-size: 13px; }
+
+    /* Single stock detail card */
+    .stock-detail {
+      background: var(--card); border: 1px solid var(--line);
+      border-radius: 22px; padding: 22px; margin-bottom: 18px;
+      box-shadow: var(--shadow);
+    }
+    .stock-detail h2 { margin: 0 0 6px; font-size: 24px; }
+    .stock-detail .meta { color: var(--muted); font-size: 13px; margin-bottom: 16px; }
+    .phase-badge {
+      display: inline-block; padding: 6px 14px; border-radius: 999px;
+      font-size: 14px; font-weight: 700; margin-bottom: 16px;
+    }
+    .phase-accumulation { background: rgba(45, 212, 191, 0.18); color: var(--accent-strong); border: 1px solid rgba(45, 212, 191, 0.36); }
+    .phase-breakout { background: rgba(246, 184, 95, 0.18); color: var(--warm); border: 1px solid rgba(246, 184, 95, 0.36); }
+    .phase-idle { background: rgba(147, 169, 178, 0.14); color: var(--muted); border: 1px solid rgba(147, 169, 178, 0.28); }
+    .metrics-grid {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 12px;
+    }
+    .metric-card {
+      padding: 14px; border-radius: 16px;
+      background: rgba(7, 13, 19, 0.76); border: 1px solid rgba(121, 164, 173, 0.14);
+    }
+    .metric-card .label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 6px; }
+    .metric-card .value { font-size: 22px; font-weight: 700; line-height: 1; }
+
+    /* State machine diagram */
+    .state-machine {
+      display: flex; align-items: center; justify-content: center;
+      gap: 0; margin: 18px 0; flex-wrap: wrap;
+    }
+    .sm-node {
+      padding: 16px 20px; border-radius: 18px; text-align: center;
+      min-width: 160px; border: 1px solid var(--line);
+      background: rgba(11, 19, 26, 0.78);
+    }
+    .sm-node.active { border-color: var(--accent); background: rgba(45, 212, 191, 0.10); box-shadow: 0 0 24px rgba(45, 212, 191, 0.12); }
+    .sm-node .sm-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 4px; }
+    .sm-node .sm-name { font-size: 18px; font-weight: 700; }
+    .sm-node .sm-score { font-size: 14px; color: var(--accent-strong); margin-top: 4px; }
+    .sm-arrow { font-size: 24px; color: var(--muted); padding: 0 8px; }
+
+    /* Scan result table */
+    .panel {
+      background: var(--card); border: 1px solid var(--line);
+      border-radius: 22px; padding: 22px; box-shadow: var(--shadow);
+    }
+    .panel h3 { margin: 0 0 14px; }
+    .table-wrap { overflow: auto; border-radius: 14px; border: 1px solid rgba(121, 164, 173, 0.10); }
+    table { width: 100%; border-collapse: collapse; min-width: 900px; font-size: 13px; }
+    th, td { padding: 9px 12px; text-align: left; border-bottom: 1px solid rgba(121, 164, 173, 0.10); white-space: nowrap; }
+    thead th { position: sticky; top: 0; z-index: 1; background: #12202a; }
+    .phase-cell { padding: 3px 8px; border-radius: 999px; font-size: 11px; font-weight: 700; }
+
+    .empty-msg { text-align: center; padding: 40px; color: var(--muted); font-size: 15px; }
+
+    @media (max-width: 760px) {
+      .controls { flex-direction: column; }
+      .controls input { width: 100%; }
+      .metrics-grid { grid-template-columns: 1fr 1fr; }
+      .state-machine { flex-direction: column; }
+      .sm-arrow { transform: rotate(90deg); }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <section class="hero">
+      <div class="eyebrow">gp-quant Quantum State Scanner</div>
+      <h1>量子态扫描</h1>
+      <div class="hero-copy">基于密度矩阵、相干性和退相干理论，将每只股票映射到量子态空间。叠加态 = 筹码压缩吸筹期，坍缩 = 分岔突破，退相干 = 结构衰散。</div>
+      <div class="status-row">
+        <a href="/" class="pill pill-link">← 策略控制台</a>
+        <div class="pill">密度矩阵 ρ</div>
+        <div class="pill">纯度 Tr(ρ²)</div>
+        <div class="pill">von Neumann 熵</div>
+        <div class="pill">相干衰减率</div>
+      </div>
+    </section>
+
+    <div class="controls">
+      <input type="text" id="symbol-input" placeholder="输入代码查询（如 sh600519）" />
+      <button class="btn-primary" id="query-btn">查询个股</button>
+      <span style="color:var(--muted);font-size:13px;">|</span>
+      <select id="top-n-select">
+        <option value="30">Top 30</option>
+        <option value="50" selected>Top 50</option>
+        <option value="100">Top 100</option>
+        <option value="200">Top 200</option>
+      </select>
+      <button class="btn-secondary" id="scan-btn">全市场扫描</button>
+      <span class="status-text" id="scan-status">Ready</span>
+    </div>
+
+    <section id="stock-detail-section" hidden></section>
+    <section id="scan-results-section" hidden></section>
+  </div>
+
+  <script>
+    function fmt(v) {
+      if (v === null || v === undefined || v === '') return '-';
+      if (typeof v === 'number') {
+        if (!Number.isFinite(v)) return '-';
+        return v.toLocaleString('zh-CN', { maximumFractionDigits: 4 });
+      }
+      return String(v);
+    }
+
+    function phaseClass(phase) {
+      if (phase === 'accumulation') return 'phase-accumulation';
+      if (phase === 'breakout') return 'phase-breakout';
+      return 'phase-idle';
+    }
+
+    function phaseCellStyle(phase) {
+      if (phase === 'accumulation') return 'background:rgba(45,212,191,0.16);color:#9af2dd;';
+      if (phase === 'breakout') return 'background:rgba(246,184,95,0.16);color:#f6b85f;';
+      return 'background:rgba(147,169,178,0.10);color:#93a9b2;';
+    }
+
+    function renderStockDetail(data) {
+      const sec = document.getElementById('stock-detail-section');
+      const phases = [
+        { key: 'accumulation', label: '叠加态', name: 'Superposition', score: data.accum_quality },
+        { key: 'breakout', label: '坍缩', name: 'Collapse', score: data.bifurc_quality },
+        { key: 'idle', label: '退相干', name: 'Decoherence', score: null },
+      ];
+      const smHtml = phases.map((p, i) => {
+        const active = data.phase === p.key ? ' active' : '';
+        const arrow = i < phases.length - 1 ? '<div class="sm-arrow">→</div>' : '';
+        return `<div class="sm-node${active}">
+          <div class="sm-label">${p.label}</div>
+          <div class="sm-name">${p.name}</div>
+          ${p.score !== null ? `<div class="sm-score">${fmt(p.score)}</div>` : ''}
+        </div>${arrow}`;
+      }).join('');
+
+      const metrics = [
+        ['置换熵', data.perm_entropy],
+        ['路径不可逆', data.path_irrev],
+        ['主特征值', data.dom_eig],
+        ['L1 相干性', data.coherence_l1],
+        ['纯度', data.purity],
+        ['相干衰减率', data.coherence_decay_rate],
+        ['von Neumann 熵', data.von_neumann_entropy],
+        ['量能脉冲', data.vol_impulse],
+        ['熵加速度', data.entropy_accel],
+        ['惜售质量', data.accum_quality],
+        ['分岔质量', data.bifurc_quality],
+        ['综合评分', data.composite_score],
+      ];
+      const metricsHtml = metrics.map(([label, value]) =>
+        `<div class="metric-card"><div class="label">${label}</div><div class="value">${fmt(value)}</div></div>`
+      ).join('');
+
+      sec.innerHTML = `
+        <div class="stock-detail">
+          <h2>${data.name || data.symbol} <span style="font-size:14px;color:var(--muted);">${data.symbol}</span></h2>
+          <div class="meta">${data.industry || '-'} · ${data.trade_date} · 入场信号: ${data.entry_signal ? '✓ 是' : '✗ 否'}</div>
+          <div class="phase-badge ${phaseClass(data.phase)}">${data.phase_label}</div>
+          <div class="state-machine">${smHtml}</div>
+          <div class="metrics-grid">${metricsHtml}</div>
+        </div>`;
+      sec.hidden = false;
+    }
+
+    function renderScanResults(payload) {
+      const sec = document.getElementById('scan-results-section');
+      if (!payload.results || payload.results.length === 0) {
+        sec.innerHTML = '<div class="panel"><div class="empty-msg">没有找到符合条件的股票。</div></div>';
+        sec.hidden = false;
+        return;
+      }
+      const cols = [
+        { key: 'symbol', label: '代码' },
+        { key: 'name', label: '名称' },
+        { key: 'industry', label: '行业' },
+        { key: 'phase_label', label: '量子态' },
+        { key: 'composite_score', label: '综合评分' },
+        { key: 'accum_quality', label: '惜售质量' },
+        { key: 'bifurc_quality', label: '分岔质量' },
+        { key: 'purity', label: '纯度' },
+        { key: 'coherence_l1', label: 'L1相干' },
+        { key: 'coherence_decay_rate', label: '衰减率' },
+        { key: 'von_neumann_entropy', label: 'VN熵' },
+        { key: 'perm_entropy', label: '置换熵' },
+        { key: 'path_irrev', label: '不可逆' },
+      ];
+      const thead = '<tr>' + cols.map(c => `<th>${c.label}</th>`).join('') + '</tr>';
+      const tbody = payload.results.map(row => {
+        const cells = cols.map(c => {
+          if (c.key === 'phase_label') {
+            return `<td><span class="phase-cell" style="${phaseCellStyle(row.phase)}">${fmt(row.phase_label)}</span></td>`;
+          }
+          if (c.key === 'symbol') {
+            return `<td><a href="#" onclick="querySingle('${row.symbol}');return false;" style="color:var(--accent);text-decoration:none;">${row.symbol}</a></td>`;
+          }
+          return `<td>${fmt(row[c.key])}</td>`;
+        }).join('');
+        return `<tr>${cells}</tr>`;
+      }).join('');
+
+      // Count by phase
+      const accum = payload.results.filter(r => r.phase === 'accumulation').length;
+      const brk = payload.results.filter(r => r.phase === 'breakout').length;
+      const idle = payload.results.filter(r => r.phase === 'idle').length;
+
+      sec.innerHTML = `
+        <div class="panel">
+          <h3>扫描结果 <span style="font-size:13px;color:var(--muted);">
+            ${payload.scan_date} · ${payload.count} 只 ·
+            叠加态 ${accum} · 坍缩 ${brk} · 退相干 ${idle}
+          </span></h3>
+          <div class="table-wrap"><table><thead>${thead}</thead><tbody>${tbody}</tbody></table></div>
+        </div>`;
+      sec.hidden = false;
+    }
+
+    async function querySingle(symbol) {
+      if (!symbol) return;
+      const status = document.getElementById('scan-status');
+      status.textContent = '查询中...';
+      document.getElementById('query-btn').disabled = true;
+      try {
+        const resp = await fetch('/api/quantum/stock/' + encodeURIComponent(symbol.trim()));
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.error || 'Query failed');
+        renderStockDetail(data);
+        status.textContent = '查询完成';
+      } catch (e) {
+        status.textContent = e.message;
+      } finally {
+        document.getElementById('query-btn').disabled = false;
+      }
+    }
+
+    document.getElementById('query-btn').addEventListener('click', () => {
+      const sym = document.getElementById('symbol-input').value.trim();
+      if (sym) querySingle(sym);
+    });
+
+    document.getElementById('symbol-input').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        const sym = e.target.value.trim();
+        if (sym) querySingle(sym);
+      }
+    });
+
+    document.getElementById('scan-btn').addEventListener('click', async () => {
+      const topN = parseInt(document.getElementById('top-n-select').value) || 50;
+      const status = document.getElementById('scan-status');
+      const btn = document.getElementById('scan-btn');
+      status.textContent = '扫描中... 请耐心等待';
+      btn.disabled = true;
+      try {
+        const resp = await fetch('/api/quantum/scan?top_n=' + topN);
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.error || 'Scan failed');
+        renderScanResults(data);
+        status.textContent = `扫描完成 · ${data.count} 只`;
+      } catch (e) {
+        status.textContent = e.message;
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>
+"""
+
+
 def _run_strategy(strategy: dict[str, Any], values: dict[str, Any]) -> dict[str, Any]:
     command, command_display, output_dir = _build_command(strategy, values)
     completed = subprocess.run(
@@ -3283,6 +3813,34 @@ def create_app() -> Flask:
             return jsonify(result)
         except Exception as exc:
             return jsonify({"error": str(exc)}), 500
+
+    @app.get("/api/quantum/scan")
+    def api_quantum_scan():
+        top_n = request.args.get("top_n", 50, type=int)
+        scan_date = request.args.get("scan_date", "", type=str)
+        top_n = max(1, min(top_n, 500))
+        try:
+            results, actual_date = _quantum_scan_market(top_n=top_n, scan_date=scan_date)
+            return jsonify({"ok": True, "scan_date": actual_date, "count": len(results), "results": results})
+        except Exception as exc:
+            _quantum_logger.exception("quantum scan failed")
+            return jsonify({"error": str(exc)}), 500
+
+    @app.get("/api/quantum/stock/<symbol>")
+    def api_quantum_stock(symbol: str):
+        scan_date = request.args.get("scan_date", "", type=str)
+        try:
+            result = _quantum_scan_single(symbol, scan_date=scan_date)
+            if result is None:
+                return jsonify({"error": f"Symbol {symbol} not found or insufficient data"}), 404
+            return jsonify({"ok": True, **result})
+        except Exception as exc:
+            _quantum_logger.exception("quantum stock query failed")
+            return jsonify({"error": str(exc)}), 500
+
+    @app.get("/quantum")
+    def quantum_page():
+        return QUANTUM_HTML
 
     return app
 

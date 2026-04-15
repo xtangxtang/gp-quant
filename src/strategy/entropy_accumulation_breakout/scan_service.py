@@ -54,6 +54,18 @@ class ScanConfig:
     # 检测器参数
     detector: DetectorConfig = field(default_factory=DetectorConfig)
 
+    def __post_init__(self):
+        """归一化日期字段: 2025/01/01 或 2025-01-01 → 20250101"""
+        for attr in ("scan_date", "backtest_start_date", "backtest_end_date"):
+            v = getattr(self, attr, "").strip()
+            for sep in ("/", "-"):
+                if sep in v:
+                    parts = v.split(sep)
+                    if len(parts) == 3 and all(p.isdigit() for p in parts):
+                        v = f"{int(parts[0]):04d}{int(parts[1]):02d}{int(parts[2]):02d}"
+                    break
+            setattr(self, attr, v)
+
 
 # ═════════════════════════════════════════════════════════
 # 数据加载

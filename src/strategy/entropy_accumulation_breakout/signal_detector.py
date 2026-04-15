@@ -33,12 +33,6 @@ class DetectorConfig:
     path_irrev_high: float = 0.05
     # 换手率熵低于此值视为流动性收缩
     turnover_entropy_low: float = 0.6
-    # 成交量萎缩比率 (近期/长期 < 此值 = 缩量)
-    vol_shrink_threshold: float = 0.7
-    # 波动率压缩比率 (短/长 < 此值 = 压缩)
-    vol_compress_threshold: float = 0.8
-    # 布林带宽度分位数 (< 此值 = 极度压缩)
-    bbw_pctl_threshold: float = 0.3
     # 惜售状态最少持续天数
     accum_min_days: int = 5
     # 大单净额累计为正 (如果有数据)
@@ -49,8 +43,6 @@ class DetectorConfig:
     dom_eig_threshold: float = 0.85
     # 量能脉冲 > 此值 = 放量
     vol_impulse_threshold: float = 1.8
-    # 价格处于区间高位
-    breakout_range_min: float = 0.8
     # 突破时熵仍需低于此值 (有序突破)
     perm_entropy_breakout_max: float = 0.75
 
@@ -65,6 +57,14 @@ class DetectorConfig:
     vol_exhaustion_ratio: float = 0.3
     # 最长持有天数 (安全网)
     max_hold_days: int = 20
+
+    # ── 量子相干性 (Quantum Coherence) ──
+    # 惜售阶段纯度下限 (状态越纯 = 筹码越集中)
+    purity_accum_min: float = 0.6
+    # 突破阶段退相干速率阈值 (负值 = 方向正在确认)
+    coherence_decay_breakout: float = -0.005
+    # 崩塌阶段纯度上限 (极低纯度 = 共识瓦解)
+    purity_collapse_max: float = 0.3
 
     # ── 周线确认 ──
     weekly_perm_entropy_max: float = 0.75
@@ -99,14 +99,6 @@ def detect_accumulation(
     if "path_irrev_m" in df.columns:
         conds.append(df["path_irrev_m"] > cfg.path_irrev_high)
 
-    # 3. 成交量萎缩 (惜售)
-    if "vol_shrink" in df.columns:
-        conds.append(df["vol_shrink"] < cfg.vol_shrink_threshold)
-
-    # 4. 波动率压缩 (横盘整理)
-    if "vol_compression" in df.columns:
-        conds.append(df["vol_compression"] < cfg.vol_compress_threshold)
-
     if len(conds) == 0:
         return pd.Series(False, index=df.index)
 
@@ -130,28 +122,23 @@ def accumulation_quality(df: pd.DataFrame, cfg: DetectorConfig) -> pd.Series:
     # 置换熵: 越低越好, 归一化到 [0, 1]
     if "perm_entropy_m" in df.columns:
         s = 1.0 - df["perm_entropy_m"].clip(0.3, 1.0) / 1.0
-        scores.append(s * 0.30)
+        scores.append(s.fillna(0) * 0.35)
 
     # 路径不可逆性: 越高越好
     if "path_irrev_m" in df.columns:
         s = df["path_irrev_m"].clip(0, 0.5) / 0.5
-        scores.append(s * 0.25)
-
-    # 成交量萎缩: 越萎缩越好
-    if "vol_shrink" in df.columns:
-        s = 1.0 - df["vol_shrink"].clip(0.2, 1.5) / 1.5
-        scores.append(s * 0.20)
-
-    # 波动率压缩: BBW 分位数越低越好
-    if "bbw_pctl" in df.columns:
-        s = 1.0 - df["bbw_pctl"].clip(0, 1)
-        scores.append(s * 0.15)
+        scores.append(s.fillna(0) * 0.30)
 
     # 大单净额: 正向流入
     if "big_net_ratio_ma" in df.columns:
         s = df["big_net_ratio_ma"].clip(-0.1, 0.1) / 0.1  # [-1, 1]
         s = (s + 1) / 2  # [0, 1]
-        scores.append(s * 0.10)
+        scores.append(s.fillna(0.5) * 0.15)
+
+    # 密度矩阵纯度: 越高 = 状态越集中 = 惜售越明确
+    if "purity_norm" in df.columns:
+        s = df["purity_norm"].clip(0, 1)
+        scores.append(s.fillna(0) * 0.20)
 
     if len(scores) == 0:
         return pd.Series(0.0, index=df.index)
@@ -179,8 +166,7 @@ def detect_bifurcation_breakout(
       1. 前一阶段处于惜售状态 (有足够的能量积累)
       2. 主特征值接近 1 (临界减速 → 即将分岔)
       3. 量能脉冲 (能量注入打破对称性)
-      4. 价格处于区间高位或突破
-      5. 熵仍然保持较低 (有序突破, 非噪声驱动)
+      4. 熵仍然保持较低 (有序突破, 非噪声驱动)
     """
     conds = []
 
@@ -196,10 +182,6 @@ def detect_bifurcation_breakout(
     if "vol_impulse" in df.columns:
         conds.append(df["vol_impulse"] > cfg.vol_impulse_threshold)
 
-    # 价格在区间高位
-    if "breakout_range" in df.columns:
-        conds.append(df["breakout_range"] > cfg.breakout_range_min)
-
     # 熵仍低 (有序突破)
     if "perm_entropy_m" in df.columns:
         conds.append(df["perm_entropy_m"] < cfg.perm_entropy_breakout_max)
@@ -212,25 +194,41 @@ def detect_bifurcation_breakout(
 
 
 def bifurcation_quality(df: pd.DataFrame, cfg: DetectorConfig) -> pd.Series:
-    """分岔突破质量分数 [0, 1]."""
+    """分岔突破质量分数 [0, 1].
+
+    权重分配:
+      - dom_eig:                0.25  (临界减速)
+      - vol_impulse:            0.25  (能量注入)
+      - perm_entropy:           0.15  (有序度)
+      - path_irrev:             0.15  (方向性)
+      - coherence_decay_rate:   0.20  (退相干速率 — 方向确认速度)
+    """
     scores = []
 
     if "dom_eig_m" in df.columns:
         s = df["dom_eig_m"].clip(0.5, 1.0)
         s = (s - 0.5) / 0.5  # [0, 1]
-        scores.append(s * 0.35)
+        scores.append(s.fillna(0) * 0.25)
 
     if "vol_impulse" in df.columns:
         s = (df["vol_impulse"].clip(1, 5) - 1) / 4  # [0, 1]
-        scores.append(s * 0.30)
+        scores.append(s.fillna(0) * 0.25)
 
     if "perm_entropy_m" in df.columns:
         s = 1.0 - df["perm_entropy_m"].clip(0.3, 1.0) / 1.0
-        scores.append(s * 0.20)
+        scores.append(s.fillna(0) * 0.15)
 
     if "path_irrev_m" in df.columns:
         s = df["path_irrev_m"].clip(0, 0.5) / 0.5
-        scores.append(s * 0.15)
+        scores.append(s.fillna(0) * 0.15)
+
+    # 退相干速率: 负值越大 = 方向确认越快 = 突破质量越高
+    if "coherence_decay_rate" in df.columns:
+        # coherence_decay_rate 为负时表示退相干 (好信号)
+        # 映射: [-0.05, 0] → [1, 0], 正值 → 0
+        cdr = df["coherence_decay_rate"].fillna(0.0)
+        s = (-cdr).clip(0, 0.05) / 0.05  # [0, 1]
+        scores.append(s * 0.20)
 
     if len(scores) == 0:
         return pd.Series(0.0, index=df.index)
@@ -288,12 +286,18 @@ def detect_structural_collapse(
         current_vs_peak = df.loc[post_entry, "vol_impulse"] / peak_vol.replace(0, np.nan)
         sig_vol_exhaustion.loc[post_entry] = current_vs_peak < cfg.vol_exhaustion_ratio
 
+    # Signal 5: 密度矩阵纯度骤降 (共识瓦解 = 退相干完成后状态混合)
+    sig_purity_collapse = pd.Series(False, index=df.index)
+    if "purity_norm" in df.columns:
+        sig_purity_collapse = df["purity_norm"] < cfg.purity_collapse_max
+
     # 综合: 至少三个信号同时触发 → 崩塌
     score = (
         sig_entropy_high.astype(int)
         + sig_irrev_low.astype(int)
         + sig_entropy_accel.astype(int)
         + sig_vol_exhaustion.astype(int)
+        + sig_purity_collapse.astype(int)
     )
     collapse_signals = score >= min_collapse_score
 
@@ -363,10 +367,6 @@ def evaluate_symbol(
             last_w_entropy = df_weekly_featured["perm_entropy_m"].iloc[-1]
             if pd.notna(last_w_entropy):
                 weekly_ok = last_w_entropy < cfg.weekly_perm_entropy_max
-        if "close" in df_weekly_featured.columns and len(df_weekly_featured) >= 8:
-            w_close = df_weekly_featured["close"]
-            weekly_trend_up = w_close.iloc[-1] >= w_close.rolling(8).mean().iloc[-1]
-            weekly_ok = weekly_ok and weekly_trend_up
 
     # 最新状态
     last = len(df) - 1
@@ -392,7 +392,9 @@ def evaluate_symbol(
     # 收集详情
     details = {}
     for col in ["perm_entropy_m", "path_irrev_m", "dom_eig_m", "vol_impulse",
-                 "vol_shrink", "bbw_pctl", "entropy_accel"]:
+                 "entropy_accel",
+                 "coherence_l1", "purity_norm", "coherence_decay_rate",
+                 "von_neumann_entropy"]:
         if col in df.columns:
             v = df[col].iloc[last]
             details[col] = round(float(v), 4) if pd.notna(v) else None

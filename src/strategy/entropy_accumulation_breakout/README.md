@@ -1,6 +1,6 @@
 # 熵惜售分岔突破策略 (Entropy-Accumulation-Breakout)
 
-> 基于信息熵、路径不可逆性、临界减速理论的三阶段交易系统
+> 基于信息熵、路径不可逆性、临界减速理论与量子相干性的三阶段交易系统
 
 ---
 
@@ -45,6 +45,9 @@
 | 临界减速 (Critical Slowing Down) | 即将突破的前兆 | 主特征值 → 1 |
 | 对称性破缺 | 量价突破 | 成交量脉冲 > 1.8× |
 | 耗散结构维持失败 | 趋势衰竭 | 熵快速扩张 + 量能衰竭 |
+| 量子叠加态 | 多空力量共存，方向未决 | coherence_l1 高 |
+| 波函数坍缩 | 方向确认，趋势启动 | coherence_decay_rate 为负 |
+| 退相干 | 共识瓦解 | purity_norm 骤降 |
 
 ---
 
@@ -107,66 +110,86 @@
 
 **应用**：结构崩塌退出阶段的辅助参考——当置换熵快速扩张且伴随极端收益出现时，趋势可能接近终点。
 
+### 2.7 量子相干性与退相干
+
+**Baumgratz et al. (2014)** — *Quantifying Coherence* (PRL 113(14), 140401)
+
+量子力学的密度矩阵形式为市场状态编码提供了更丰富的工具。传统状态分类器（ordered/chaos/critical）给出离散标签，而密度矩阵同时编码：
+- **对角元**：各状态的概率（与 `market_state_classifier` 等价）
+- **非对角元**：状态间的相干性（新信息——度量"方向未决的程度"）
+
+关键新指标 — **退相干速率** `coherence_decay_rate`：
+- 负值：相干性衰减 = 方向正在确认 = 市场从"叠加态"向"确定态"坍缩
+- 正值：相干性增加 = 不确定性在增加 = 共识正在瓦解
+- |值|越大：状态变化越快
+
+$$C_{l_1}(\rho) = \sum_{i \neq j} |\rho_{ij}|, \quad \dot{C} = \frac{\Delta C_{l_1}}{\Delta t}$$
+
+**应用**：`coherence_decay_rate` 作为 `bifurcation_quality` 的第 5 个因子（权重 20%），退相干越快 = 突破质量越高。`purity_norm` 辅助惜售质量评分（高纯度 = 状态集中 = 惜售明确）和崩塌检测（低纯度 = 共识瓦解）。
+
 ---
 
 ## 3. 三阶段状态机
 
 ```
-                    ┌─────────────────────────────────────────┐
-                    │                                         │
-                    ▼                                         │
-              ┌──────────┐                                    │
-          ┌──▶│   idle   │◀─────────────────────┐             │
-          │   └────┬─────┘                      │             │
-          │        │                            │             │
-          │        │ 置换熵 < 0.65              │             │
-          │        │ 路径不可逆性 > 0.05        │             │
-          │        │ 成交量萎缩                 │             │
-          │        │ 波动率压缩                 │ 条件不满足   │
-          │        │ 持续 ≥ 5 天                │             │
-          │        ▼                            │             │
-          │   ┌──────────────┐                  │             │
-          │   │ accumulation │──────────────────┘             │
-          │   └────┬─────────┘                                │
-          │        │                                          │
-          │        │ 主特征值 > 0.85                           │
-          │        │ 量能脉冲 > 1.8×                           │
-          │        │ 价格突破区间高位                            │
-          │        │ 置换熵仍 < 0.75                            │
-          │        │ 周线趋势确认                                │
-          │        ▼                                           │
-          │   ┌──────────┐      ★ BUY SIGNAL                  │
-          │   │ breakout │──────────────────────┐              │
-          │   └────┬─────┘                      │              │
-          │        │                            ▼              │
-          │        │                     ┌────────────┐        │
-          │        │                     │   hold     │        │
-          │        │                     └────┬───────┘        │
-          │        │                          │                │
-          │        │      置换熵 > 0.90       │                │
-          │        │      路径不可逆性 < 0.01  │                │
-          │        │      熵加速度 > 0.05      │                │
-          │        │      量能衰竭 < 0.3×峰值  │                │
-          │        │      (任意 3/4 触发)       │                │
-          │        │      或止损 ≤ -10%        │                │
-          │        │                          ▼                │
-          │        │                     ┌──────────┐          │
-          └────────┼─────────────────────│ collapse │──────────┘
-                   │                     └──────────┘
-                   │                       ★ SELL SIGNAL
+                    ┌───────────────────────────────────────────────┐
+                    │                                               │
+                    ▼                                               │
+              ┌──────────┐                                          │
+          ┌──▶│   idle   │◀───────────────────────────┐             │
+          │   └────┬─────┘                            │             │
+          │        │                                  │             │
+          │        │ 置换熵 < 0.65 (有序)             │             │
+          │        │ 路径不可逆性 > 0.05 (定向力量)    │             │
+          │        │ 纯度 > 0.6 (状态集中)             │             │
+          │        │ 持续 ≥ 5 天                       │ 条件不满足  │
+          │        ▼                                  │             │
+          │   ┌──────────────┐                        │             │
+          │   │ accumulation │────────────────────────┘             │
+          │   │  (叠加态)     │                                      │
+          │   └────┬─────────┘                                      │
+          │        │                                                │
+          │        │ 主特征值 > 0.85 (临界减速)                       │
+          │        │ 量能脉冲 > 1.8× (能量注入)                       │
+          │        │ 置换熵仍 < 0.75 (有序突破)                        │
+          │        │ 退相干速率 < 0 (方向正在确认)                      │
+          │        │ 周线置换熵 < 0.75 (多尺度确认)                     │
+          │        ▼                                                │
+          │   ┌──────────┐        ★ BUY SIGNAL                     │
+          │   │ breakout │────────────────────────┐                 │
+          │   │ (坍缩)    │                        │                 │
+          │   └────┬─────┘                        ▼                 │
+          │        │                       ┌────────────┐           │
+          │        │                       │   hold     │           │
+          │        │                       │  (趋势态)   │           │
+          │        │                       └────┬───────┘           │
+          │        │                            │                   │
+          │        │    置换熵 > 0.90 (无序扩散)  │                   │
+          │        │    路径不可逆性 < 0.01       │                   │
+          │        │    熵加速度 > 0.05           │                   │
+          │        │    量能衰竭 < 0.3×峰值       │                   │
+          │        │    纯度骤降 < 0.3 (共识瓦解)  │                   │
+          │        │    (任意 3/5 触发)            │                   │
+          │        │    或止损 ≤ -10%             │                   │
+          │        │                            ▼                   │
+          │        │                       ┌──────────┐             │
+          └────────┼───────────────────────│ collapse │─────────────┘
+                   │                       │ (退相干)  │
+                   │                       └──────────┘
+                   │                         ★ SELL SIGNAL
                    │
                    └── 直接回到 idle (未进入突破)
 ```
 
 ### 状态定义
 
-| 状态 | 含义 | 物理解释 |
-|------|------|---------|
-| **idle** | 无信号 | 系统处于远离临界态的平衡状态 |
-| **accumulation** | 惜售吸筹中 | 局部熵降低，耗散结构正在形成 |
-| **breakout** | 分岔突破 | 临界点到达，对称性破缺，新平衡态形成 |
-| **hold** | 持有中 | 耗散结构维持，趋势自我强化 |
-| **collapse** | 结构崩塌 | 耗散结构维持失败，熵增主导 |
+| 状态 | 含义 | 物理解释 | 量子类比 |
+|------|------|---------|---------|
+| **idle** | 无信号 | 系统处于远离临界态的平衡状态 | 热平衡态 |
+| **accumulation** | 惜售吸筹中 | 局部熵降低，耗散结构正在形成 | 叠加态（多空共存） |
+| **breakout** | 分岔突破 | 临界点到达，对称性破缺，新平衡态形成 | 波函数坍缩（方向确认） |
+| **hold** | 持有中 | 耗散结构维持，趋势自我强化 | 确定态（纯态） |
+| **collapse** | 结构崩塌 | 耗散结构维持失败，熵增主导 | 退相干（共识瓦解） |
 
 ---
 
@@ -174,7 +197,7 @@
 
 ### 4.1 特征总表
 
-本策略从日线/周线 OHLCV 数据中提取 25+ 个特征，分为 9 大类：
+本策略从日线/周线 OHLCV 数据中提取 30+ 个特征，分为 10 大类：
 
 | 类别 | 特征名 | 公式 / 说明 | 用途 |
 |------|--------|-----------|------|
@@ -184,19 +207,22 @@
 | **路径不可逆性** | `path_irrev_m/l` | KLD(forward ‖ backward) ≥ 0 | 方向性力量 |
 | **主特征值** | `dom_eig_m/l` | 自相关矩阵最大特征值 [0,1] | 临界减速指标 |
 | **换手率熵** | `turnover_entropy_m/l` | 换手率分布熵 [0,1] | 流动性状态 |
-| **波动率** | `volatility_m/l` | 收益率滚动标准差 | 波动水平 |
-| | `vol_compression` | `volatility_m / volatility_l` | 波动率压缩 |
-| | `bbw` | 布林带宽度 `2σ/MA` | 价格压缩程度 |
-| | `bbw_pctl` | BBW 在过去 120 天的分位数 | 历史压缩极值 |
-| **成交量** | `vol_ratio_s` | 短期均量 / 中期均量 | 量能比 |
-| | `vol_impulse` | 当日量 / 中期均量 | 量能脉冲 |
-| | `vol_shrink` | 短期均量 / 长期均量 | 量缩程度 |
-| **价格突破** | `breakout_up` | close ≥ 20 日最高 | 布尔突破标记 |
-| | `breakout_range` | 在 20 日高低区间的相对位置 [0,1] | 价格位置 |
+| **波动率** | `volatility_m/l` | 收益率滚动标准差 | 辅助参考 |
+| | `vol_compression` | `volatility_m / volatility_l` | 辅助参考 |
+| | `bbw` | 布林带宽度 `2σ/MA` | 辅助参考 |
+| | `bbw_pctl` | BBW 在过去 120 天的分位数 | 辅助参考 |
+| **成交量** | `vol_ratio_s` | 短期均量 / 中期均量 | 辅助参考 |
+| | `vol_impulse` | 当日量 / 中期均量 | 分岔突破信号 |
+| | `vol_shrink` | 短期均量 / 长期均量 | 辅助参考 |
+| **价格位置** | `breakout_range` | 在 20 日高低区间的相对位置 [0,1] | 辅助参考（不参与信号判定） |
 | **资金流** | `mf_cumsum_s/m` | 净资金流累计（短/中） | 资金流向 |
 | | `mf_impulse` | 当日净流入 / 中期标准差 | 资金脉冲 |
 | **大单** | `big_net_ratio` | (大买 - 大卖) / 总额 | 主力方向 |
 | | `big_net_ratio_ma` | `big_net_ratio` 的短期均值 | 平滑后的主力方向 |
+| **量子相干性** | `coherence_l1` | 密度矩阵非对角元 l1-范数 [0,1] | 状态不确定性 |
+| | `purity` / `purity_norm` | Tr(ρ²)，归一化到 [0,1] | 状态纯度/集中度 |
+| | `von_neumann_entropy` | -Tr(ρ ln ρ)，归一化到 [0,1] | 量子态混合度 |
+| | `coherence_decay_rate` | ΔC/Δt，相干性变化速率 | 方向确认速度 |
 
 ### 4.2 窗口参数
 
@@ -232,31 +258,27 @@
                                     ↓
                            置换熵降低 (序列更有序)
                            路径不可逆性上升 (少数交易被同方向力量主导)
-                           波动率压缩 (没有力量对抗→水面平静)
 ```
 
 #### 检测条件
 
-同时满足以下条件中的 **至少 N-1 个**，且持续 ≥ 5 天：
+同时满足以下条件，且持续 ≥ 5 天：
 
 | 条件 | 阈值 | 含义 |
 |------|------|------|
 | `perm_entropy_m < 0.65` | 有序度 | 价格序列变得更可预测 |
 | `path_irrev_m > 0.05` | 方向性 | 存在定向操作力量 |
-| `vol_shrink < 0.7` | 量缩 | 近期成交量显著低于长期均值 |
-| `vol_compression < 0.8` | 压缩 | 短期波动率低于长期波动率 |
 
 #### 质量评分
 
 惜售质量分 `accum_quality ∈ [0, 1]`，加权公式：
 
-$$\text{AQ} = 0.30 \times S_{\text{entropy}} + 0.25 \times S_{\text{irrev}} + 0.20 \times S_{\text{vol\_shrink}} + 0.15 \times S_{\text{bbw}} + 0.10 \times S_{\text{big\_net}}$$
+$$\text{AQ} = 0.35 \times S_{\text{entropy}} + 0.30 \times S_{\text{irrev}} + 0.15 \times S_{\text{big\_net}} + 0.20 \times S_{\text{purity}}$$
 
 - $S_{\text{entropy}} = 1 - \frac{\text{perm\_entropy\_m}}{1.0}$，越低越好
 - $S_{\text{irrev}} = \frac{\text{path\_irrev\_m}}{0.5}$，越高越好
-- $S_{\text{vol\_shrink}} = 1 - \frac{\text{vol\_shrink}}{1.5}$，越萎缩越好
-- $S_{\text{bbw}} = 1 - \text{bbw\_pctl}$，分位数越低越好
 - $S_{\text{big\_net}} = \frac{\text{big\_net\_ratio\_ma} + 0.1}{0.2}$，正向流入加分
+- $S_{\text{purity}} = \text{purity\_norm}$，密度矩阵纯度越高 = 状态越集中 = 惜售越明确
 
 ### 5.2 Phase 2: 分岔突破检测
 
@@ -267,7 +289,7 @@ $$\text{AQ} = 0.30 \times S_{\text{entropy}} + 0.25 \times S_{\text{irrev}} + 0.
 ```
 能量积累 (惜售) → 临界态 → 外部扰动 (放量) → 对称性破缺 → 新趋势
     ↓                ↓              ↓               ↓
- accum 阶段     dom_eig → 1    vol_impulse > 1.8   breakout_range > 0.8
+ accum 阶段     dom_eig → 1    vol_impulse > 1.8   perm_entropy < 0.75
 ```
 
 **关键**：必须是「有序突破」——突破时熵仍保持低位，说明不是噪声驱动的假突破。
@@ -281,14 +303,15 @@ $$\text{AQ} = 0.30 \times S_{\text{entropy}} + 0.25 \times S_{\text{irrev}} + 0.
 | 近期有惜售 | 过去 10 天内 `is_accumulating` 为 True | 有足够的能量积累 |
 | `dom_eig_m > 0.85` | 临界减速 | 系统自相关增强，接近失稳点 |
 | `vol_impulse > 1.8` | 量能脉冲 | 放量打破均衡 |
-| `breakout_range > 0.8` | 价格位置 | 处于区间高位或突破 |
 | `perm_entropy_m < 0.75` | 有序突破 | 排除噪声驱动的假突破 |
 
 #### 质量评分
 
 分岔质量分 `bifurc_quality ∈ [0, 1]`：
 
-$$\text{BQ} = 0.35 \times S_{\text{dom\_eig}} + 0.30 \times S_{\text{vol\_impulse}} + 0.20 \times S_{\text{entropy}} + 0.15 \times S_{\text{irrev}}$$
+$$\text{BQ} = 0.25 \times S_{\text{dom\_eig}} + 0.25 \times S_{\text{vol\_impulse}} + 0.15 \times S_{\text{entropy}} + 0.15 \times S_{\text{irrev}} + 0.20 \times S_{\text{decay}}$$
+
+- $S_{\text{decay}} = \text{clip}(-\text{coherence\_decay\_rate}, 0, 0.05) / 0.05$，退相干速率越快（负值越大）= 方向确认越快 = 突破质量越高
 
 ### 5.3 Phase 3: 结构崩塌退出
 
@@ -304,7 +327,7 @@ $$\text{BQ} = 0.35 \times S_{\text{dom\_eig}} + 0.30 \times S_{\text{vol\_impuls
 
 #### 检测条件
 
-以下 4 个信号中 **任意 3 个同时触发** 即判定崩塌：
+以下 5 个信号中 **任意 3 个同时触发** 即判定崩塌：
 
 | 信号 | 阈值 | 含义 |
 |------|------|------|
@@ -312,10 +335,11 @@ $$\text{BQ} = 0.35 \times S_{\text{dom\_eig}} + 0.30 \times S_{\text{vol\_impuls
 | `path_irrev_m < 0.01` | 不可逆性骤降 | 定向力量消失（主力撤离） |
 | `entropy_accel > 0.05` | 熵加速 | 熵在加速膨胀，不可控 |
 | `vol_impulse / peak_vol < 0.3` | 量能衰竭 | 能量供给不足以维持结构 |
+| `purity_norm < 0.3` | 纯度骤降 | 密度矩阵状态混合 = 市场共识瓦解 |
 
 **止损安全网**：持仓亏损超过 10% 强制止损退出。
 
-> **设计理念**：要求 3/4 信号共振才判定崩塌，避免单一通道噪声导致过早退出。纯理论驱动持有 — 无固定持有天数限制，让趋势自然运行直至结构坍塌。
+> **设计理念**：要求 3/5 信号共振才判定崩塌，避免单一通道噪声导致过早退出。纯理论驱动持有 — 无固定持有天数限制，让趋势自然运行直至结构坍塌。
 
 ### 5.4 综合评分
 
@@ -336,7 +360,8 @@ $$\text{CS} = 0.4 \times \text{AQ} + 0.6 \times \text{BQ}$$
 | 周线条件 | 阈值 | 含义 |
 |---------|------|------|
 | 周线置换熵 | `< 0.75` | 周级别也是有序的，不是日线维度的噪声 |
-| 周线趋势 | 收盘价 ≥ 8 周均线 | 中期趋势向上 |
+
+> **周线数据来源**：不是独立数据源，而是从日线 CSV（`tushare-daily-full/{symbol}.csv`）通过 `aggregate_to_weekly()` 按周五截止重采样聚合而来，再独立计算一遍熵/分岔特征。
 
 ### 为什么需要周线确认
 
@@ -452,9 +477,6 @@ aggregate_to_weekly(df_daily)
 | `perm_entropy_low` | 0.65 | 置换熵低于此值视为有序 |
 | `path_irrev_high` | 0.05 | 路径不可逆性高于此值视为有定向力量 |
 | `turnover_entropy_low` | 0.6 | 换手率熵低于此值视为流动性收缩 |
-| `vol_shrink_threshold` | 0.7 | 近/长期量比低于此值视为缩量 |
-| `vol_compress_threshold` | 0.8 | 短/长期波动率比低于此值视为压缩 |
-| `bbw_pctl_threshold` | 0.3 | BBW 分位数低于此值视为极度压缩 |
 | `accum_min_days` | 5 | 惜售状态最少持续天数 |
 | `big_net_positive` | True | 要求大单净额为正 |
 
@@ -464,7 +486,6 @@ aggregate_to_weekly(df_daily)
 |------|--------|------|
 | `dom_eig_threshold` | 0.85 | 主特征值超过此值视为临界减速 |
 | `vol_impulse_threshold` | 1.8 | 量能脉冲超过此值视为放量突破 |
-| `breakout_range_min` | 0.8 | 价格需在 20 日区间顶部 80% |
 | `perm_entropy_breakout_max` | 0.75 | 突破时熵需低于此值（有序突破） |
 
 #### Phase 3 — 结构崩塌
@@ -475,7 +496,15 @@ aggregate_to_weekly(df_daily)
 | `path_irrev_collapse` | 0.01 | 不可逆性跌破此值视为主力撤离 |
 | `entropy_accel_collapse` | 0.05 | 熵加速度超过此值视为熵快速膨胀 |
 | `vol_exhaustion_ratio` | 0.3 | 当前量 / 峰值量低于此值视为衰竭 |
-| 崩塌触发阈值 | 3/4 | 4 个信号中至少 3 个触发才判定崩塌 |
+| 崩塌触发阈值 | 3/5 | 5 个信号中至少 3 个触发才判定崩塌 |
+
+#### 量子相干性
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `purity_accum_min` | 0.6 | 惜售阶段纯度下限（状态越纯 = 筹码越集中） |
+| `coherence_decay_breakout` | -0.005 | 突破阶段退相干速率阈值（负值 = 方向正在确认） |
+| `purity_collapse_max` | 0.3 | 崩塌阶段纯度上限（极低纯度 = 共识瓦解） |
 
 #### 周线确认
 
@@ -566,8 +595,8 @@ exit_reason (collapse | stop_loss | end_of_backtest), pnl_pct, hold_days, score
 ```
 src/strategy/entropy_accumulation_breakout/
 ├── __init__.py                          # 包初始化
-├── feature_engine.py                    # 特征引擎 (25+ 特征)
-├── signal_detector.py                   # 三阶段状态检测器
+├── feature_engine.py                    # 特征引擎 (30+ 特征，含量子相干性)
+├── signal_detector.py                   # 三阶段状态检测器 (含退相干速率增强)
 ├── scan_service.py                      # 扫描服务
 ├── market_regime.py                     # 市场状态检测器 (5 状态)
 ├── backtest_fast.py                     # 高速回测引擎 (组合跟踪式)
@@ -616,6 +645,10 @@ src/core/tick_entropy.py  ← 核心熵计算模块
   ├── rolling_dominant_eigenvalue()
   ├── rolling_turnover_entropy()
   └── _discretize_trinary(), _rolling_apply_1d()
+
+src/core/quantum_coherence.py  ← 量子相干性模块
+  └── compute_quantum_coherence_features()
+        → coherence_l1, purity, von_neumann_entropy, coherence_decay_rate
 ```
 
 ---
@@ -691,3 +724,12 @@ src/core/tick_entropy.py  ← 核心熵计算模块
 
 6. **Ardakani, O. M.** (2025). Detecting Financial Bubbles with Tail-Weighted Entropy.
    - 尾部加权熵检测泡沫与崩塌
+
+7. **Baumgratz, T., Cramer, M. & Plenio, M. B.** (2014). Quantifying Coherence. *Physical Review Letters*, 113(14), 140401.
+   - l1-范数相干性度量 → coherence_l1 指标的理论基础
+
+8. **Baaquie, B. E.** (2004). *Quantum Finance: Path Integrals and Hamiltonians for Options and Interest Rates*. Cambridge University Press.
+   - 量子力学数学框架在金融中的应用; 密度矩阵 → 市场状态编码
+
+9. **Busemeyer, J. R. & Bruza, P. D.** (2012). *Quantum Models of Cognition and Decision*. Cambridge University Press.
+   - 量子概率论解释决策行为中的经典概率违反现象 → 叠加/坍缩/退相干类比的理论依据

@@ -84,15 +84,42 @@ class DailyFinancialAgent(BaseAgent):
         start_ann = (datetime.strptime(current_div_max, "%Y%m%d") + timedelta(days=1)).strftime("%Y%m%d")
         update_dividend(pro, self.data_dir, start_ann, today, batch_limiter)
 
-        # Phase 5: financials
-        if not skip_financials:
-            financial_limiter = RateLimiter(financial_rate, 60)
-            fin_start = (datetime.strptime(today, "%Y%m%d") - timedelta(days=20)).strftime("%Y%m%d")
-            fin_datasets = [d for d in FINANCIAL_DATASETS]
-            for i, ds in enumerate(fin_datasets):
-                self.update_progress(f"financial_{ds}", i + 1, len(fin_datasets))
-                update_financial_dataset(pro, self.data_dir, ds, symbols, fin_start, today, financial_limiter, financial_threads)
-            self.update_progress("financial_done", len(fin_datasets), len(fin_datasets))
+        # Phase 5: financials — only in earnings months (1/4/7/10)
+        current_month = datetime.today().month
+        is_earnings_month = current_month in (1, 4, 7, 10)
+
+        if skip_financials or not is_earnings_month:
+            reason = "skip_financials flag" if skip_financials else f"non-earnings month ({current_month})"
+            print(f"[{self.name}] [financial] Skipped: {reason}", flush=True)
+            self.update_progress("financial_skipped")
+        else:
+            # Check if we already have data covering this earnings month
+            # Use the 1st of current month as the boundary; if the latest ann_date
+            # in any dataset is >= month start, we consider it already synced.
+            month_start = datetime.today().replace(day=1).strftime("%Y%m%d")
+            already_synced = True
+            for ds, cfg in FINANCIAL_DATASETS.items():
+                ds_dir = os.path.join(self.data_dir, cfg["dir_name"])
+                if os.path.isdir(ds_dir):
+                    last_map = build_last_date_map(ds_dir, cfg["date_col"])
+                    latest = max(last_map.values()) if last_map else "19900101"
+                else:
+                    latest = "19900101"
+                if latest < month_start:
+                    already_synced = False
+                    break
+
+            if already_synced:
+                print(f"[{self.name}] [financial] Skipped: earnings month but data already synced (latest >= {month_start})", flush=True)
+                self.update_progress("financial_skipped")
+            else:
+                financial_limiter = RateLimiter(financial_rate, 60)
+                fin_start = (datetime.strptime(today, "%Y%m%d") - timedelta(days=20)).strftime("%Y%m%d")
+                fin_datasets = [d for d in FINANCIAL_DATASETS]
+                for i, ds in enumerate(fin_datasets):
+                    self.update_progress(f"financial_{ds}", i + 1, len(fin_datasets))
+                    update_financial_dataset(pro, self.data_dir, ds, symbols, fin_start, today, financial_limiter, financial_threads)
+                self.update_progress("financial_done", len(fin_datasets), len(fin_datasets))
 
 
 if __name__ == "__main__":

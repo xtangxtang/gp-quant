@@ -24,6 +24,7 @@
 | [path-irreversibility](concepts/path-irreversibility.md) | 路径不可逆性：前向/反向转移概率不对称 | `entropy`, `irreversibility` |
 | [strategic-abandonment](concepts/strategic-abandonment.md) | 战略放弃：高噪声环境下的最优退出 | `control-theory`, `noise` |
 | [multitimeframe-resonance](concepts/multitimeframe-resonance.md) | 多时间框架共振：日/周/月级别趋势共振 | `multitimeframe`, `resonance` |
+| [quantum-coherence](concepts/quantum-coherence.md) | 量子相干性与市场状态坍缩：密度矩阵、退相干速率 | `quantum`, `coherence`, `density-matrix` |
 
 ## 实体 (Entities)
 

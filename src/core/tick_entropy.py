@@ -444,13 +444,66 @@ def rolling_permutation_entropy(
     window: int = 60,
     order: int = 3
 ) -> pd.Series:
-    """滚动计算排列熵"""
-    arr = series.to_numpy(dtype=np.float64)
-    result = np.full(len(arr), np.nan, dtype=np.float64)
+    """
+    滚动计算排列熵 — 滑动窗口直方图加速版
 
-    for i in range(window - 1, len(arr)):
-        window_vals = arr[i - window + 1: i + 1]
-        result[i] = permutation_entropy(window_vals, order=order)
+    对 order=3 使用比较编码 + 滑动直方图, 避免逐窗口 np.argsort.
+    复杂度从 O(n * w * w) 降到 O(n).
+    """
+    arr = series.to_numpy(dtype=np.float64)
+    n = len(arr)
+    result = np.full(n, np.nan, dtype=np.float64)
+
+    if n < window or window < order + 2:
+        return pd.Series(result, index=series.index)
+
+    if order != 3:
+        # 非 order=3 退回原始逐窗口方式
+        for i in range(window - 1, n):
+            result[i] = permutation_entropy(arr[i - window + 1: i + 1], order=order)
+        return pd.Series(result, index=series.index)
+
+    # ── order=3 快速路径: 比较编码 + 滑动直方图 ──
+    # 对每个连续三元组 (arr[j], arr[j+1], arr[j+2]) 编码为 0-7
+    a = arr[:-2]   # arr[j]
+    b = arr[1:-1]  # arr[j+1]
+    c = arr[2:]    # arr[j+2]
+    code = ((a > b).astype(np.int32) << 2) | \
+           ((a > c).astype(np.int32) << 1) | \
+           ((b > c).astype(np.int32))
+    # 6 种有效排列映射到 {0,1,3,4,6,7}, 共 8 个桶
+
+    n_codes = len(code)          # = n - 2
+    n_tri = window - order + 1   # 每个窗口内的三元组数 = window - 2
+    normalizer = math.log(math.factorial(order))  # log(6)
+
+    if n_tri <= 0 or n_codes < n_tri:
+        return pd.Series(result, index=series.index)
+
+    # 初始窗口: codes[0 : n_tri]
+    counts = np.zeros(8, dtype=np.int64)
+    for j in range(n_tri):
+        counts[code[j]] += 1
+
+    def _entropy_from_counts(counts, total, normalizer):
+        mask = counts > 0
+        if not mask.any():
+            return np.nan
+        prob = counts[mask].astype(np.float64) / total
+        return float(-(prob * np.log(prob)).sum()) / normalizer
+
+    # 第一个有效位置
+    result[window - 1] = _entropy_from_counts(counts, n_tri, normalizer)
+
+    # 滑动窗口: 每步移除一个旧编码, 加入一个新编码
+    for i in range(window, n):
+        rem_idx = i - window      # 移除的编码索引
+        add_idx = i - 2           # 新增的编码索引
+        if rem_idx < n_codes:
+            counts[code[rem_idx]] -= 1
+        if add_idx < n_codes:
+            counts[code[add_idx]] += 1
+        result[i] = _entropy_from_counts(counts, n_tri, normalizer)
 
     return pd.Series(result, index=series.index)
 

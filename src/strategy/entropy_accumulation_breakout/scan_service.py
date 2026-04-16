@@ -21,8 +21,14 @@ from .signal_detector import (
     detect_structural_collapse,
     evaluate_symbol,
 )
+from src.core.tick_entropy import permutation_entropy as _pe_fast
 
 logger = logging.getLogger(__name__)
+
+# ── 多进程共享状态 (fork COW) ──
+_BT_CACHE: dict[str, pd.DataFrame] = {}
+_BT_BASIC: dict[str, dict] = {}
+_BT_DETECTOR: "DetectorConfig | None" = None
 
 
 # ═════════════════════════════════════════════════════════
@@ -266,108 +272,157 @@ class Trade:
     hold_days: int = 0
 
 
+def _bt_scan_worker(args: tuple) -> "SymbolSignal | None":
+    """Worker: 在子进程中对单只股票做快速特征计算+信号检测 (回测专用)"""
+    sym, sd, bt_lookback, min_amount = args
+    df_full = _BT_CACHE.get(sym)
+    if df_full is None:
+        return None
+
+    df_cut = df_full[df_full["trade_date"].astype(str) <= sd]
+    if len(df_cut) < 120:
+        return None
+
+    # 流动性过滤
+    recent = df_cut.tail(20)
+    if "amount" in recent.columns and recent["amount"].mean() < min_amount:
+        return None
+
+    # 快速 PE 预过滤
+    tail_close = df_cut["close"].astype(np.float64).values[-20:]
+    if len(tail_close) >= 20:
+        quick_pe = _pe_fast(tail_close, order=3)
+        if quick_pe is not None and not np.isnan(quick_pe) and quick_pe > 0.85:
+            return None
+
+    df_slice = df_cut.tail(bt_lookback).reset_index(drop=True)
+    if len(df_slice) < 60:
+        return None
+
+    try:
+        feats = build_features(df_slice, skip_weekly=True)
+        sig = evaluate_symbol(feats["daily"], feats.get("weekly"), sym, _BT_DETECTOR)
+        info = _BT_BASIC.get(sym, {})
+        sig.details["name"] = info.get("name", "")
+        sig.details["industry"] = info.get("industry", "")
+        if sig.phase in ("breakout", "accumulation"):
+            return sig
+    except Exception:
+        pass
+    return None
+
+
 def run_backtest(
     cfg: ScanConfig,
     scan_dates: list[str] | None = None,
 ) -> tuple[pd.DataFrame, list[Trade]]:
     """
     前瞻回测: 在每个 scan_date 扫描 → 选股 → 持有 hold_days → 退出.
-    退出策略包含结构崩塌检测.
+
+    优化: 预加载 CSV 到内存, 避免每轮重复磁盘 IO.
     """
+    import time as _time
+    import multiprocessing as _mp
+
     basic_info = _load_basic_info(cfg.basic_path)
-    all_symbols = _resolve_symbols(cfg.data_dir, None)
+    all_symbols = _resolve_symbols(cfg.data_dir, cfg.symbols if cfg.symbols else None)
+
+    # ── 预加载 CSV (一次 IO, 多轮复用) ──
+    t_load = _time.time()
+    logger.info("Pre-loading %d symbol CSVs into memory …", len(all_symbols))
+    data_cache: dict[str, pd.DataFrame] = {}
+    for sym in all_symbols:
+        df = _load_daily(cfg.data_dir, sym)
+        if df is None or len(df) < 120:
+            continue
+        info = basic_info.get(sym, {})
+        name = info.get("name", "")
+        if cfg.exclude_st and ("ST" in name or "退" in name):
+            continue
+        data_cache[sym] = df
+    logger.info("Loaded %d symbols in %.1fs", len(data_cache), _time.time() - t_load)
 
     # 交易日历
-    cal_dates = set()
-    for sym in all_symbols[:5]:
-        df = _load_daily(cfg.data_dir, sym)
-        if df is not None:
-            for d in df["trade_date"].astype(str):
-                cal_dates.add(d)
-    cal_dates = sorted(cal_dates)
+    cal_dates: set[str] = set()
+    for sym in list(data_cache.keys())[:10]:
+        for d in data_cache[sym]["trade_date"].astype(str):
+            cal_dates.add(d)
+    cal_dates_sorted = sorted(cal_dates)
 
-    # 确定回测日期范围
+    # 日期范围
     start = cfg.backtest_start_date
     end = cfg.backtest_end_date
     if not start:
-        start = cal_dates[max(0, len(cal_dates) - 250)]
+        start = cal_dates_sorted[max(0, len(cal_dates_sorted) - 250)]
     if not end:
-        end = cal_dates[-1]
-    bt_dates = [d for d in cal_dates if start <= d <= end]
+        end = cal_dates_sorted[-1]
+    bt_dates = [d for d in cal_dates_sorted if start <= d <= end]
 
     if scan_dates is None:
-        # 每 hold_days 天扫描一次
         scan_dates = bt_dates[::cfg.hold_days]
+
+    logger.info("Backtest %s→%s, %d rounds (hold_days=%d), %d symbols",
+                start, end, len(scan_dates), cfg.hold_days, len(data_cache))
+
+    # ── 将缓存写入模块级全局变量 (fork COW 共享) ──
+    global _BT_CACHE, _BT_BASIC, _BT_DETECTOR
+    _BT_CACHE = data_cache
+    _BT_BASIC = basic_info
+    _BT_DETECTOR = cfg.detector
+
+    n_workers = min(16, max(1, (_mp.cpu_count() or 4) // 2))
+    pool = _mp.Pool(n_workers)
+    logger.info("Using %d worker processes", n_workers)
 
     trades: list[Trade] = []
     equity = [1.0]
     equity_dates = [start]
 
-    for sd in scan_dates:
+    for round_idx, sd in enumerate(scan_dates):
         if sd > end:
             break
 
-        cfg_scan = ScanConfig(
-            data_dir=cfg.data_dir,
-            basic_path=cfg.basic_path,
-            scan_date=sd,
-            symbols=cfg.symbols,
-            lookback_days=cfg.lookback_days,
-            min_amount=cfg.min_amount,
-            exclude_st=cfg.exclude_st,
-            top_n=cfg.top_n,
-            detector=cfg.detector,
-        )
-        try:
-            all_result, top_picks = run_scan(cfg_scan)
-        except Exception as e:
-            logger.warning("Scan failed for %s: %s", sd, e)
+        t_round = _time.time()
+
+        # ── 并行扫描: 用 multiprocessing Pool ──
+        bt_lookback = 200
+        tasks = [(sym, sd, bt_lookback, cfg.min_amount) for sym in data_cache.keys()]
+        raw_results = pool.map(_bt_scan_worker, tasks, chunksize=64)
+        signals = [sig for sig in raw_results if sig is not None]
+
+        elapsed_round = _time.time() - t_round
+        logger.info("  round %d/%d  date=%s  signals=%d  %.1fs",
+                     round_idx + 1, len(scan_dates), sd, len(signals), elapsed_round)
+
+        if not signals:
             continue
 
-        if len(top_picks) == 0:
-            continue
+        # 按综合分排序, 优先 breakout
+        signals.sort(key=lambda s: s.composite_score, reverse=True)
+        picks = [s for s in signals if s.phase == "breakout"][:cfg.max_positions]
+        if not picks:
+            picks = signals[:cfg.max_positions]
 
-        # 取前 max_positions 只
-        picks = top_picks.head(cfg.max_positions)
-
-        # 模拟持有
+        # ── 模拟持有 ──
         batch_pnls = []
-        for _, row in picks.iterrows():
-            sym = row["symbol"]
-            df_full = _load_daily(cfg.data_dir, sym)
-            if df_full is None:
-                continue
-
+        for sig in picks:
+            sym = sig.symbol
+            df_full = data_cache[sym]
             df_after = df_full[df_full["trade_date"].astype(str) > sd].head(cfg.hold_days + 1)
             if len(df_after) < 2:
                 continue
 
             entry_price = float(df_after["close"].iloc[0])
-
-            # 持有期间做结构崩塌检测
             exit_idx = len(df_after) - 1
             exit_reason = "hold_days"
 
-            # 简易崩塌检测: 看持有期间熵是否飙升
-            if len(df_after) >= 5:
-                df_hold_ctx = df_full[df_full["trade_date"].astype(str) <= str(df_after["trade_date"].iloc[-1])].tail(cfg.lookback_days)
-                if len(df_hold_ctx) >= 60:
-                    try:
-                        feats_hold = build_features(df_hold_ctx)
-                        collapse = detect_structural_collapse(
-                            feats_hold["daily"], len(feats_hold["daily"]) - len(df_after), cfg.detector
-                        )
-                        # 找到第一个崩塌信号
-                        collapse_tail = collapse.iloc[-len(df_after):]
-                        collapse_idx = collapse_tail[collapse_tail].index
-                        if len(collapse_idx) > 0:
-                            first_collapse = collapse_idx[0]
-                            relative = first_collapse - collapse_tail.index[0]
-                            if relative < exit_idx:
-                                exit_idx = relative
-                                exit_reason = "collapse"
-                    except Exception:
-                        pass
+            # 止损
+            for i in range(1, len(df_after)):
+                pnl_i = (float(df_after["close"].iloc[i]) - entry_price) / entry_price
+                if pnl_i <= -0.10:
+                    exit_idx = i
+                    exit_reason = "stop_loss"
+                    break
 
             exit_price = float(df_after["close"].iloc[min(exit_idx, len(df_after) - 1)])
             pnl = (exit_price - entry_price) / entry_price
@@ -391,7 +446,11 @@ def run_backtest(
             equity.append(new_eq)
             equity_dates.append(sd)
 
-    # 汇总
+    pool.close()
+    pool.join()
+    # 清理全局引用
+    _BT_CACHE.clear()
+
     df_equity = pd.DataFrame({"date": equity_dates, "equity": equity})
     return df_equity, trades
 

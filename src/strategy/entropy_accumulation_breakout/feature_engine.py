@@ -259,6 +259,7 @@ def build_features(
     df_daily: pd.DataFrame,
     daily_windows: dict[str, int] | None = None,
     weekly_windows: dict[str, int] | None = None,
+    skip_weekly: bool = False,
 ) -> dict[str, pd.DataFrame]:
     """
     构建日线 + 周线双时间框架特征.
@@ -272,8 +273,10 @@ def build_features(
 
     df_d = compute_single_timeframe_features(df_daily, daily_w)
 
-    # 周线特征
-    df_w_raw = aggregate_to_weekly(df_daily)
-    df_w = compute_single_timeframe_features(df_w_raw, weekly_w) if len(df_w_raw) >= 12 else df_w_raw
+    # 周线特征 (回测模式可跳过以加速)
+    df_w = None
+    if not skip_weekly:
+        df_w_raw = aggregate_to_weekly(df_daily)
+        df_w = compute_single_timeframe_features(df_w_raw, weekly_w) if len(df_w_raw) >= 12 else df_w_raw
 
     return {"daily": df_d, "weekly": df_w}

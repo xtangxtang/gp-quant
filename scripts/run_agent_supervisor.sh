@@ -37,7 +37,7 @@ case "$CMD" in
     echo "  run                     运行每日增量同步 (stock_list → daily_financial → minute → derived)"
     echo "  run --agent <name>      只运行指定 Agent"
     echo "  run --all               包含所有 Agent (含 market_data)"
-    echo "  daemon                  守护进程模式，每日 16:00 自动运行"
+    echo "  daemon                  守护进程模式，每日 17:00 自动运行"
     echo ""
     echo "Available agents: stock_list, daily_financial, market_data, minute, derived"
     exit 1

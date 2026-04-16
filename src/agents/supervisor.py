@@ -11,7 +11,7 @@ Usage:
   python supervisor.py --data-dir /path/to/gp-data run --token <token> --agent daily_financial
 
   # Daemon mode: wait until schedule_time, then run
-  python supervisor.py --data-dir /path/to/gp-data daemon --token <token> --schedule-time 16:00
+  python supervisor.py --data-dir /path/to/gp-data daemon --token <token> --schedule-time 17:00
 """
 
 import json
@@ -243,7 +243,7 @@ def cmd_run(data_dir: str, token: str, agent_name: str | None = None,
     return all_ok
 
 
-def cmd_daemon(data_dir: str, token: str, schedule_time: str = "16:00",
+def cmd_daemon(data_dir: str, token: str, schedule_time: str = "17:00",
                max_retries: int = 3, retry_interval: int = 300):
     """Daemon mode: run daily at schedule_time on trading days."""
     print(f"[supervisor] Daemon started. Schedule: {schedule_time} on trading days.")
@@ -300,7 +300,7 @@ def main():
     # daemon
     daemon_p = sub.add_parser("daemon", help="Daemon mode: daily scheduled runs")
     daemon_p.add_argument("--token", required=True, help="Tushare token")
-    daemon_p.add_argument("--schedule-time", default="16:00", help="HH:MM trigger time")
+    daemon_p.add_argument("--schedule-time", default="17:00", help="HH:MM trigger time")
     daemon_p.add_argument("--max-retries", type=int, default=3)
     daemon_p.add_argument("--retry-interval", type=int, default=300)
 

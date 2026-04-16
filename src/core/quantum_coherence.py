@@ -132,23 +132,7 @@ def density_matrix_from_features(
     window: int = 20,
 ) -> list[np.ndarray | None]:
     """
-    从特征时间序列滚动构造密度矩阵
-
-    参数
-    ----
-    perm_entropy_series : np.ndarray
-        排列熵序列
-    path_irrev_series : np.ndarray
-        路径不可逆性序列
-    dom_eig_series : np.ndarray
-        主导特征值序列
-    window : int
-        滚动窗口
-
-    返回
-    ----
-    list[np.ndarray | None]
-        每个时间点的 4×4 密度矩阵，前 window-1 个为 None
+    从特征时间序列滚动构造密度矩阵（向量化实现）
     """
     pe = np.asarray(perm_entropy_series, dtype=np.float64)
     pi = np.asarray(path_irrev_series, dtype=np.float64)
@@ -157,20 +141,38 @@ def density_matrix_from_features(
     n = len(pe)
     result: list[np.ndarray | None] = [None] * n
 
-    # 预计算所有状态向量
-    state_vecs = np.zeros((n, 4), dtype=np.float64)
-    valid = np.zeros(n, dtype=bool)
-    for t in range(n):
-        if np.isfinite(pe[t]) and np.isfinite(pi[t]) and np.isfinite(de[t]):
-            state_vecs[t] = _features_to_state_vector(pe[t], pi[t], de[t])
-            valid[t] = True
+    # 向量化: 一次性计算所有状态向量
+    finite_mask = np.isfinite(pe) & np.isfinite(pi) & np.isfinite(de)
+    pe_safe = np.where(finite_mask, pe, 0.5)
+    pi_safe = np.clip(np.where(finite_mask, pi, 0.0), 0.0, 1.0)
+    de_abs = np.clip(np.abs(np.where(finite_mask, de, 0.0)), 0.0, 1.0)
+
+    affinities = np.column_stack([
+        (1.0 - pe_safe) * (1.0 - pi_safe) * (1.0 - de_abs),
+        (1.0 - pe_safe) * de_abs,
+        pi_safe * (0.5 + 0.5 * pe_safe),
+        pe_safe * (1.0 - pi_safe),
+    ])
+    affinities = np.clip(affinities, 0.0, None)
+    totals = affinities.sum(axis=1, keepdims=True)
+    totals = np.where(totals < 1e-12, 1.0, totals)
+    probs = affinities / totals
+    state_vecs = np.sqrt(probs)  # (n, 4)
+
+    min_valid = max(5, window // 4)
 
     for i in range(window - 1, n):
-        window_mask = valid[i - window + 1: i + 1]
-        if window_mask.sum() < max(5, window // 4):
+        wslice = slice(i - window + 1, i + 1)
+        wmask = finite_mask[wslice]
+        if wmask.sum() < min_valid:
             continue
-        window_vecs = state_vecs[i - window + 1: i + 1][window_mask]
-        result[i] = density_matrix_from_state_vectors(window_vecs)
+        wvecs = state_vecs[wslice][wmask]  # (k, 4)
+        # ρ = (1/k) Σ |ψ⟩⟨ψ| = V^T V / k
+        rho = (wvecs.T @ wvecs) / wvecs.shape[0]
+        trace = np.trace(rho)
+        if trace > 1e-12:
+            rho /= trace
+        result[i] = rho
 
     return result
 
@@ -275,31 +277,15 @@ def coherence_decay_rate(
     window: int = 5,
 ) -> np.ndarray:
     """
-    计算相干性衰减速率
-
-    ΔC/Δt ≈ (C(t) - C(t - window)) / window
-
-    参数
-    ----
-    coherence_series : np.ndarray
-        相干性时间序列
-    window : int
-        差分窗口
-
-    返回
-    ----
-    np.ndarray
-        衰减速率序列
-        - 正值: 相干性在增加（不确定性增加/共识瓦解）
-        - 负值: 退相干进行中（方向正在确认/共识形成）
-        - |值| 大: 变化越快
+    计算相干性衰减速率  ΔC/Δt ≈ (C(t) - C(t - window)) / window
     """
     c = np.asarray(coherence_series, dtype=np.float64)
     n = len(c)
     result = np.full(n, np.nan, dtype=np.float64)
-    for i in range(window, n):
-        if np.isfinite(c[i]) and np.isfinite(c[i - window]):
-            result[i] = (c[i] - c[i - window]) / window
+    if n > window:
+        diff = c[window:] - c[:-window]
+        mask = np.isfinite(diff)
+        result[window:][mask] = diff[mask] / window
     return result
 
 
@@ -350,17 +336,27 @@ def compute_quantum_coherence_features(
     # 计算滚动密度矩阵
     rho_list = density_matrix_from_features(pe, pi, de, window=rho_window)
 
-    # 提取指标
+    # 向量化提取指标
     coh = np.full(n, np.nan, dtype=np.float64)
     pur = np.full(n, np.nan, dtype=np.float64)
     vne = np.full(n, np.nan, dtype=np.float64)
 
     for i in range(n):
         rho = rho_list[i]
-        if rho is not None:
-            coh[i] = coherence_l1(rho)
-            pur[i] = purity(rho)
-            vne[i] = von_neumann_entropy(rho)
+        if rho is None:
+            continue
+        d = rho.shape[0]
+        # coherence_l1: off-diagonal l1 norm, normalized
+        coh[i] = (np.sum(np.abs(rho)) - np.sum(np.abs(np.diag(rho)))) / (d - 1)
+        # purity: Tr(ρ²)
+        pur[i] = float(np.real(np.trace(rho @ rho)))
+        # von_neumann_entropy: -Tr(ρ ln ρ), normalized
+        eigvals = np.linalg.eigvalsh(rho)
+        eigvals = eigvals[eigvals > 1e-12]
+        if len(eigvals) > 0:
+            vne[i] = float(-np.sum(eigvals * np.log(eigvals))) / np.log(d)
+        else:
+            vne[i] = 0.0
 
     # 退相干速率
     cdr = coherence_decay_rate(coh, window=decay_window)

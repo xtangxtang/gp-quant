@@ -3742,7 +3742,7 @@ def _run_strategy(strategy: dict[str, Any], values: dict[str, Any]) -> dict[str,
         cwd=str(REPO_ROOT),
         text=True,
         capture_output=True,
-        timeout=3600,
+        timeout=7200,
     )
     log = (completed.stdout or "") + ("\n" if completed.stdout and completed.stderr else "") + (completed.stderr or "")
     if completed.returncode != 0:

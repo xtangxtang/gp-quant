@@ -4,11 +4,13 @@ import logging
 import re
 import subprocess
 import sys
+import threading
+import uuid
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
-from flask import Flask, jsonify, request
+from flask import Flask, Response, jsonify, request
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -626,6 +628,31 @@ APP_HTML = """<!doctype html>
       color: var(--muted);
       font-size: 13px;
     }
+
+    .log-box {
+      margin-top: 12px;
+      max-height: 320px;
+      overflow-y: auto;
+      background: #1a1d23;
+      color: #c8ccd4;
+      font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+      font-size: 12px;
+      line-height: 1.6;
+      padding: 14px 16px;
+      border-radius: 10px;
+      white-space: pre-wrap;
+      word-break: break-all;
+      display: none;
+      border: 1px solid rgba(255,255,255,0.06);
+    }
+    .log-box.active {
+      display: block;
+    }
+    .log-box .log-info { color: #61afef; }
+    .log-box .log-warn { color: #e5c07b; }
+    .log-box .log-err  { color: #e06c75; }
+    .log-box .log-done { color: #98c379; font-weight: 600; }
+    .log-box .log-cmd  { color: #c678dd; }
 
     .summary-grid {
       display: grid;
@@ -1366,6 +1393,7 @@ APP_HTML = """<!doctype html>
                 <button type="button" class="btn-secondary" id="reset-btn">恢复默认</button>
                 <span class="run-status" id="run-status">Ready</span>
               </div>
+              <div class="log-box" id="log-box"></div>
             </form>
           </section>
 
@@ -2211,28 +2239,86 @@ APP_HTML = """<!doctype html>
       document.getElementById('run-status').textContent = 'Ready';
     }
 
+    function logAppend(box, text, cls) {
+      const span = document.createElement('span');
+      if (cls) span.className = cls;
+      span.textContent = text + '\n';
+      box.appendChild(span);
+      box.scrollTop = box.scrollHeight;
+    }
+
+    function logClassify(line) {
+      const l = line.toLowerCase();
+      if (l.includes('error') || l.includes('traceback') || l.includes('exception')) return 'log-err';
+      if (l.includes('warning') || l.includes('warn')) return 'log-warn';
+      if (l.includes('round') || l.includes('scanning') || l.includes('backtest') || l.includes('loaded') || l.includes('pre-loading') || l.includes('using')) return 'log-info';
+      if (l.startsWith('$')) return 'log-cmd';
+      return '';
+    }
+
     async function applyStrategy(event) {
       event.preventDefault();
       if (!state.current) return;
       const button = document.getElementById('apply-btn');
       const status = document.getElementById('run-status');
+      const logBox = document.getElementById('log-box');
       button.disabled = true;
-      status.textContent = 'Applying...';
+      logBox.innerHTML = '';
+      logBox.classList.add('active');
+      status.textContent = '启动中...';
+
       try {
         const values = collectFormValues(state.current);
-        const resp = await fetch(`/api/strategies/${encodeURIComponent(state.current.id)}/apply`, {
+        const strategyId = encodeURIComponent(state.current.id);
+
+        // 1) 启动流式任务
+        const startResp = await fetch(`/api/strategies/${strategyId}/stream`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ values }),
         });
+        const startData = await startResp.json();
+        if (!startResp.ok) throw new Error(startData.error || '启动失败');
+        const taskId = startData.task_id;
+        const cmdDisplay = startData.command_display || '';
+        if (cmdDisplay) logAppend(logBox, '$ ' + cmdDisplay, 'log-cmd');
+        status.textContent = '执行中...';
+
+        // 2) SSE 接收实时日志
+        await new Promise((resolve, reject) => {
+          const es = new EventSource(`/api/tasks/${taskId}/logs`);
+          es.addEventListener('log', (e) => {
+            logAppend(logBox, e.data, logClassify(e.data));
+          });
+          es.addEventListener('done', (e) => {
+            const code = parseInt(e.data || '0');
+            logAppend(logBox, `\n进程退出码: ${code}`, code === 0 ? 'log-done' : 'log-err');
+            es.close();
+            if (code !== 0) reject(new Error(`策略执行失败 (exit ${code})`));
+            else resolve();
+          });
+          es.addEventListener('error_msg', (e) => {
+            logAppend(logBox, e.data, 'log-err');
+            es.close();
+            reject(new Error(e.data));
+          });
+          es.onerror = () => {
+            es.close();
+            resolve();  // 连接断开视为结束
+          };
+        });
+
+        // 3) 任务完成, 加载结果
+        status.textContent = '加载结果...';
+        const resp = await fetch(`/api/tasks/${taskId}/result`);
         const payload = await resp.json();
-        if (!resp.ok) {
-          throw new Error(payload.error || 'Apply failed');
-        }
+        if (!resp.ok) throw new Error(payload.error || '加载结果失败');
         renderApplyResult(payload);
-        status.textContent = 'Applied';
+        status.textContent = '完成';
+        logAppend(logBox, '\n✓ 结果已加载', 'log-done');
       } catch (error) {
-        status.textContent = error.message || 'Apply failed';
+        status.textContent = error.message || '执行失败';
+        logAppend(logBox, '\n✗ ' + (error.message || '执行失败'), 'log-err');
       } finally {
         button.disabled = false;
       }
@@ -3775,6 +3861,75 @@ def _run_strategy(strategy: dict[str, Any], values: dict[str, Any]) -> dict[str,
     }
 
 
+def _collect_result(strategy: dict[str, Any], values: dict[str, Any], output_dir: Path) -> dict[str, Any]:
+    """从 output_dir 收集策略执行结果 (不执行子进程)"""
+    scan_dates = _scan_dates(output_dir)
+    scan_date = scan_dates[0] if scan_dates else str(values.get("scan_date") or "")
+    bundle = _load_bundle(output_dir, scan_date) if scan_date else {"summary": pd.DataFrame(), "selected": pd.DataFrame(), "candidates": pd.DataFrame(), "backtest_summary": pd.DataFrame()}
+    summary_rows = _normalize_rows(bundle.get("summary", pd.DataFrame()), 1)
+    backtest_summary_rows = _normalize_rows(bundle.get("backtest_summary", pd.DataFrame()), 1)
+    raw_selected_rows = _normalize_rows(bundle.get("selected", pd.DataFrame()), 100)
+    selected_rows = _selected_display_rows(raw_selected_rows, strategy, values)
+    candidate_rows = _normalize_rows(bundle.get("candidates", pd.DataFrame()), 100)
+    return {
+        "ok": True,
+        "strategy_id": strategy.get("id"),
+        "base_id": strategy.get("base_id", strategy.get("id")),
+        "scan_date": scan_date,
+        "summary": summary_rows[0] if summary_rows else {},
+        "backtest_summary": backtest_summary_rows[0] if backtest_summary_rows else {},
+        "selected_rows": selected_rows,
+        "candidate_rows": candidate_rows,
+        "state_flow": _state_flow_payload(summary_rows[0], candidate_rows) if strategy.get("base_id") == "uptrend_hold_state_flow" and summary_rows else None,
+        "strategy_focus": _strategy_focus_payload(strategy, summary_rows[0] if summary_rows else {}, raw_selected_rows, candidate_rows),
+        "selected_count": len(selected_rows),
+        "candidate_count": len(candidate_rows),
+        "output_dir": str(output_dir),
+    }
+
+
+# ═════════════════════════════════════════════════════════
+# 流式任务管理 (SSE)
+# ═════════════════════════════════════════════════════════
+
+_tasks: dict[str, dict[str, Any]] = {}
+_tasks_lock = threading.Lock()
+
+
+def _task_runner(task_id: str, command: list[str], output_dir: Path,
+                 strategy: dict[str, Any], values: dict[str, Any]):
+    """在后台线程运行子进程, 逐行收集 stdout/stderr"""
+    task = _tasks[task_id]
+    try:
+        proc = subprocess.Popen(
+            command,
+            cwd=str(REPO_ROOT),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+        task["pid"] = proc.pid
+
+        for line in proc.stdout:
+            line = line.rstrip("\n")
+            with _tasks_lock:
+                task["log_lines"].append(line)
+
+        proc.wait()
+        task["returncode"] = proc.returncode
+
+        # 收集结果
+        if proc.returncode == 0:
+            task["result"] = _collect_result(strategy, values, output_dir)
+        else:
+            task["error"] = f"Strategy exited with code {proc.returncode}"
+    except Exception as exc:
+        task["error"] = str(exc)
+    finally:
+        task["done"] = True
+
+
 def create_app() -> Flask:
     app = Flask(__name__)
 
@@ -3813,6 +3968,84 @@ def create_app() -> Flask:
             return jsonify(result)
         except Exception as exc:
             return jsonify({"error": str(exc)}), 500
+
+    @app.post("/api/strategies/<strategy_id>/stream")
+    def api_strategy_stream(strategy_id: str):
+        """启动流式任务, 返回 task_id"""
+        try:
+            strategy = _resolve_strategy(strategy_id)
+        except KeyError:
+            return jsonify({"error": "Strategy not found"}), 404
+
+        payload = request.get_json(silent=True) or {}
+        values = payload.get("values", {}) if isinstance(payload, dict) else {}
+        command, command_display, output_dir = _build_command(strategy, values)
+
+        task_id = uuid.uuid4().hex[:12]
+        _tasks[task_id] = {
+            "done": False,
+            "returncode": None,
+            "log_lines": [],
+            "result": None,
+            "error": None,
+            "pid": None,
+            "strategy": strategy,
+            "values": values,
+            "output_dir": output_dir,
+        }
+
+        t = threading.Thread(target=_task_runner, args=(task_id, command, output_dir, strategy, values), daemon=True)
+        t.start()
+
+        return jsonify({"task_id": task_id, "command_display": command_display})
+
+    @app.get("/api/tasks/<task_id>/logs")
+    def api_task_logs(task_id: str):
+        """SSE 流式推送子进程日志"""
+        task = _tasks.get(task_id)
+        if task is None:
+            return jsonify({"error": "Task not found"}), 404
+
+        def generate():
+            cursor = 0
+            import time as _time
+            while True:
+                with _tasks_lock:
+                    lines = task["log_lines"][cursor:]
+                    cursor += len(lines)
+                    done = task["done"]
+                    error = task.get("error")
+                    returncode = task.get("returncode")
+
+                for line in lines:
+                    yield f"event: log\ndata: {line}\n\n"
+
+                if done:
+                    if error and returncode is None:
+                        yield f"event: error_msg\ndata: {error}\n\n"
+                    else:
+                        yield f"event: done\ndata: {returncode or 0}\n\n"
+                    break
+
+                _time.sleep(0.3)
+
+        return Response(generate(), mimetype="text/event-stream",
+                        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+    @app.get("/api/tasks/<task_id>/result")
+    def api_task_result(task_id: str):
+        """任务完成后获取结果"""
+        task = _tasks.get(task_id)
+        if task is None:
+            return jsonify({"error": "Task not found"}), 404
+        if not task["done"]:
+            return jsonify({"error": "Task still running"}), 202
+        if task.get("error"):
+            return jsonify({"error": task["error"]}), 500
+        result = task.get("result") or {}
+        # 清理任务
+        _tasks.pop(task_id, None)
+        return jsonify(result)
 
     @app.get("/api/quantum/scan")
     def api_quantum_scan():

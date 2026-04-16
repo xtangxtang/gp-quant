@@ -32,6 +32,7 @@ def _build_argument_parser() -> argparse.ArgumentParser:
         description="Entropy-Accumulation-Breakout Strategy Scanner"
     )
     parser.add_argument("--data_dir", required=True, help="日线 CSV 目录")
+    parser.add_argument("--data_root", type=str, default="", help="数据根目录 (自动推断自 data_dir 父目录)")
     parser.add_argument("--out_dir", required=True, help="输出目录")
     parser.add_argument("--scan_date", type=str, default="", help="扫描日期 YYYYMMDD")
     parser.add_argument("--top_n", type=int, default=30, help="输出前 N 只候选")
@@ -47,6 +48,7 @@ def _build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--hold_days", type=int, default=5, help="持有天数")
     parser.add_argument("--max_positions", type=int, default=10, help="最大持仓数")
     parser.add_argument("--max_positions_per_industry", type=int, default=2, help="每行业最大持仓")
+    parser.add_argument("--feature_cache_dir", type=str, default="", help="特征缓存目录 (启用增量计算)")
     parser.add_argument("--verbose", action="store_true", help="打印详细日志")
     return parser
 
@@ -63,6 +65,7 @@ def main() -> None:
 
     cfg = ScanConfig(
         data_dir=args.data_dir,
+        data_root=args.data_root,
         basic_path=args.basic_path,
         out_dir=args.out_dir,
         scan_date=args.scan_date,
@@ -77,6 +80,7 @@ def main() -> None:
         max_per_industry=args.max_positions_per_industry,
         backtest_start_date=args.backtest_start_date,
         backtest_end_date=args.backtest_end_date,
+        feature_cache_dir=args.feature_cache_dir,
     )
 
     # ── 扫描 ──

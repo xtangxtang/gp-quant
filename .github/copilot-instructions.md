@@ -20,7 +20,7 @@ results/             # 策略输出 (CSV + JSON)
 - 数据根目录: `/nvme5/xtang/gp-workspace/gp-data/`
 - 每只股票一个 CSV: `tushare-daily-full/{symbol}.csv`
 - 衍生数据: `tushare-weekly-5d/`, `tushare-1m-free/`, `tushare-extended/`
-- Supervisor DAG: `stock_list → daily_financial/market_data → minute → derived → market_trend`
+- Supervisor DAG: `stock_list → daily_financial/market_data → minute → derived → market_trend → entropy_scan`
   详见 [src/agents/supervisor.py](src/agents/supervisor.py)
 
 ## Strategy Module Pattern
@@ -53,11 +53,14 @@ pip install -r requirements.txt
 
 # 运行策略扫描 (示例)
 python -m src.strategy.entropy_accumulation_breakout.run_entropy_accumulation_breakout \
-    --data_dir /nvme5/xtang/gp-workspace/gp-data --scan_date 20260414
+    --data_dir /nvme5/xtang/gp-workspace/gp-data/tushare-daily-full \
+    --feature_cache_dir /nvme5/xtang/gp-workspace/gp-data/feature-cache \
+    --scan_date 20260414
 
 # 回测
 python -m src.strategy.entropy_accumulation_breakout.run_entropy_accumulation_breakout \
-    --data_dir /nvme5/xtang/gp-workspace/gp-data \
+    --data_dir /nvme5/xtang/gp-workspace/gp-data/tushare-daily-full \
+    --feature_cache_dir /nvme5/xtang/gp-workspace/gp-data/feature-cache \
     --backtest_start_date 20250101 --backtest_end_date 20250630
 
 # Web 面板
@@ -122,3 +125,4 @@ def load_daily(data_dir, symbol):
 - 各策略 README: `src/strategy/{name}/README.md`
 - 已有 Skills (13 个): `.github/skills/*/SKILL.md`
 - 已有 Agents (3 个): `.github/agents/*.agent.md`
+- 特征缓存: `/nvme5/xtang/gp-workspace/gp-data/feature-cache/` (熵惜售策略增量计算缓存)

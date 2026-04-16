@@ -70,6 +70,24 @@ class DetectorConfig:
     weekly_perm_entropy_max: float = 0.75
     weekly_trend_confirm: bool = True
 
+    # ── 分钟线微观结构 ──
+    # 日内置换熵低于此值 = 日内价格有序 (吸筹时日内也应有序)
+    intraday_entropy_low: float = 0.70
+    # 日内成交量集中度高于此值 = 大单/集中时段主导
+    intraday_vol_concentration_high: float = 0.01
+    # 日内路径不可逆性高于此值 = 日内有定向力量
+    intraday_irrev_high: float = 0.03
+
+    # ── 资金流向 ──
+    # 大单净额累计(短期)为正 = 主力在买入
+    mf_big_cumsum_positive: bool = True
+    # 资金流不平衡度 > 此值 = 大单买散户卖 (吸筹特征)
+    mf_flow_imbalance_min: float = 0.3
+    # 大单连续流入天数 > 此值 = 持续吸筹
+    mf_big_streak_min: int = 3
+    # 周线大单净额累计为正 = 周级别主力流入
+    weekly_big_net_positive: bool = True
+
 
 # ═════════════════════════════════════════════════════════
 # Phase 1: 惜售吸筹检测
@@ -99,10 +117,19 @@ def detect_accumulation(
     if "path_irrev_m" in df.columns:
         conds.append(df["path_irrev_m"] > cfg.path_irrev_high)
 
+    # 3. 资金流: 大单净额累计为正 (主力在买入)
+    if "mf_big_cumsum_s" in df.columns and cfg.mf_big_cumsum_positive:
+        mf_ok = df["mf_big_cumsum_s"] > 0
+        conds.append(mf_ok)
+
+    # 4. 资金流不平衡: 大单买 + 散户卖 = 典型吸筹
+    if "mf_flow_imbalance" in df.columns:
+        conds.append(df["mf_flow_imbalance"] > cfg.mf_flow_imbalance_min)
+
     if len(conds) == 0:
         return pd.Series(False, index=df.index)
 
-    # 至少满足 3 个条件中的 N-1 个
+    # 至少满足 N-1 个条件
     score = sum(c.astype(int) for c in conds)
     min_required = max(2, len(conds) - 1)
     raw_signal = score >= min_required
@@ -122,23 +149,34 @@ def accumulation_quality(df: pd.DataFrame, cfg: DetectorConfig) -> pd.Series:
     # 置换熵: 越低越好, 归一化到 [0, 1]
     if "perm_entropy_m" in df.columns:
         s = 1.0 - df["perm_entropy_m"].clip(0.3, 1.0) / 1.0
-        scores.append(s.fillna(0) * 0.35)
+        scores.append(s.fillna(0) * 0.25)
 
     # 路径不可逆性: 越高越好
     if "path_irrev_m" in df.columns:
         s = df["path_irrev_m"].clip(0, 0.5) / 0.5
-        scores.append(s.fillna(0) * 0.30)
+        scores.append(s.fillna(0) * 0.20)
 
     # 大单净额: 正向流入
     if "big_net_ratio_ma" in df.columns:
         s = df["big_net_ratio_ma"].clip(-0.1, 0.1) / 0.1  # [-1, 1]
         s = (s + 1) / 2  # [0, 1]
-        scores.append(s.fillna(0.5) * 0.15)
+        scores.append(s.fillna(0.5) * 0.10)
 
     # 密度矩阵纯度: 越高 = 状态越集中 = 惜售越明确
     if "purity_norm" in df.columns:
         s = df["purity_norm"].clip(0, 1)
-        scores.append(s.fillna(0) * 0.20)
+        scores.append(s.fillna(0) * 0.15)
+
+    # 资金流: 大单连续流入天数 (持续性越强越好)
+    if "mf_big_streak" in df.columns:
+        s = df["mf_big_streak"].clip(0, 10) / 10
+        scores.append(s.fillna(0) * 0.15)
+
+    # 资金流不平衡: 大单买散户卖越明显越好
+    if "mf_flow_imbalance" in df.columns:
+        s = df["mf_flow_imbalance"].clip(-1, 2) / 2
+        s = (s + 0.5).clip(0, 1)  # normalize
+        scores.append(s.fillna(0.5) * 0.15)
 
     if len(scores) == 0:
         return pd.Series(0.0, index=df.index)
@@ -186,6 +224,10 @@ def detect_bifurcation_breakout(
     if "perm_entropy_m" in df.columns:
         conds.append(df["perm_entropy_m"] < cfg.perm_entropy_breakout_max)
 
+    # 5. 资金流: 大单动量为正 (突破时大单加速流入)
+    if "mf_big_momentum" in df.columns:
+        conds.append(df["mf_big_momentum"] > 0)
+
     if len(conds) < 3:
         return pd.Series(False, index=df.index)
 
@@ -197,38 +239,52 @@ def bifurcation_quality(df: pd.DataFrame, cfg: DetectorConfig) -> pd.Series:
     """分岔突破质量分数 [0, 1].
 
     权重分配:
-      - dom_eig:                0.25  (临界减速)
-      - vol_impulse:            0.25  (能量注入)
-      - perm_entropy:           0.15  (有序度)
-      - path_irrev:             0.15  (方向性)
-      - coherence_decay_rate:   0.20  (退相干速率 — 方向确认速度)
+      - dom_eig:                0.20  (临界减速)
+      - vol_impulse:            0.20  (能量注入)
+      - perm_entropy:           0.10  (有序度)
+      - path_irrev:             0.10  (方向性)
+      - coherence_decay_rate:   0.15  (退相干速率)
+      - mf_big_momentum:        0.15  (大单资金动量)
+      - mf_big_net_ratio:       0.10  (大单净额占比)
     """
     scores = []
 
     if "dom_eig_m" in df.columns:
         s = df["dom_eig_m"].clip(0.5, 1.0)
         s = (s - 0.5) / 0.5  # [0, 1]
-        scores.append(s.fillna(0) * 0.25)
+        scores.append(s.fillna(0) * 0.20)
 
     if "vol_impulse" in df.columns:
         s = (df["vol_impulse"].clip(1, 5) - 1) / 4  # [0, 1]
-        scores.append(s.fillna(0) * 0.25)
+        scores.append(s.fillna(0) * 0.20)
 
     if "perm_entropy_m" in df.columns:
         s = 1.0 - df["perm_entropy_m"].clip(0.3, 1.0) / 1.0
-        scores.append(s.fillna(0) * 0.15)
+        scores.append(s.fillna(0) * 0.10)
 
     if "path_irrev_m" in df.columns:
         s = df["path_irrev_m"].clip(0, 0.5) / 0.5
-        scores.append(s.fillna(0) * 0.15)
+        scores.append(s.fillna(0) * 0.10)
 
     # 退相干速率: 负值越大 = 方向确认越快 = 突破质量越高
     if "coherence_decay_rate" in df.columns:
-        # coherence_decay_rate 为负时表示退相干 (好信号)
-        # 映射: [-0.05, 0] → [1, 0], 正值 → 0
         cdr = df["coherence_decay_rate"].fillna(0.0)
         s = (-cdr).clip(0, 0.05) / 0.05  # [0, 1]
-        scores.append(s * 0.20)
+        scores.append(s * 0.15)
+
+    # 大单资金动量: 正值越大 = 资金加速流入
+    if "mf_big_momentum" in df.columns:
+        s = df["mf_big_momentum"].fillna(0)
+        s_std = s.rolling(20, min_periods=5).std().replace(0, np.nan)
+        s_norm = (s / s_std).clip(-2, 2)
+        s_score = (s_norm + 2) / 4  # [-2,2] → [0,1]
+        scores.append(s_score.fillna(0.5) * 0.15)
+
+    # 大单净额占比: 正值越大 = 机构控盘越强
+    if "mf_big_net_ratio" in df.columns:
+        s = df["mf_big_net_ratio"].clip(-0.3, 0.3)
+        s = (s + 0.3) / 0.6  # [0, 1]
+        scores.append(s.fillna(0.5) * 0.10)
 
     if len(scores) == 0:
         return pd.Series(0.0, index=df.index)
@@ -368,13 +424,26 @@ def evaluate_symbol(
             if pd.notna(last_w_entropy):
                 weekly_ok = last_w_entropy < cfg.weekly_perm_entropy_max
 
-    # 最新状态
+        # 周线大单净额确认 (如果有预计算周线数据)
+        if cfg.weekly_big_net_positive and "weekly_big_net_cumsum" in df_weekly_featured.columns:
+            last_w_mf = df_weekly_featured["weekly_big_net_cumsum"].iloc[-1]
+            if pd.notna(last_w_mf) and last_w_mf < 0:
+                weekly_ok = False  # 周线大单持续流出, 不确认
+
+    # 分钟线微观确认
     last = len(df) - 1
+    minute_ok = True
+    if "intraday_perm_entropy" in df.columns:
+        intra_pe = df["intraday_perm_entropy"].iloc[last]
+        if pd.notna(intra_pe) and intra_pe > cfg.intraday_entropy_low:
+            minute_ok = False  # 日内价格无序, 不确认
+
+    # 最新状态
     today_accum = bool(is_accum.iloc[last]) if last < len(is_accum) else False
     today_breakout = bool(is_breakout.iloc[last]) if last < len(is_breakout) else False
 
     # 判断阶段
-    if today_breakout and weekly_ok:
+    if today_breakout and weekly_ok and minute_ok:
         phase = "breakout"
     elif today_accum:
         phase = "accumulation"
@@ -394,7 +463,11 @@ def evaluate_symbol(
     for col in ["perm_entropy_m", "path_irrev_m", "dom_eig_m", "vol_impulse",
                  "entropy_accel",
                  "coherence_l1", "purity_norm", "coherence_decay_rate",
-                 "von_neumann_entropy"]:
+                 "von_neumann_entropy",
+                 "intraday_perm_entropy", "intraday_path_irrev",
+                 "intraday_vol_concentration", "intraday_range_ratio",
+                 "mf_big_net_ratio", "mf_big_cumsum_s", "mf_big_cumsum_m",
+                 "mf_flow_imbalance", "mf_big_streak", "mf_big_momentum"]:
         if col in df.columns:
             v = df[col].iloc[last]
             details[col] = round(float(v), 4) if pd.notna(v) else None

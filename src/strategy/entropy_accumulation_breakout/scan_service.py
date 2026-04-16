@@ -29,6 +29,8 @@ logger = logging.getLogger(__name__)
 _BT_CACHE: dict[str, pd.DataFrame] = {}
 _BT_BASIC: dict[str, dict] = {}
 _BT_DETECTOR: "DetectorConfig | None" = None
+_BT_DATA_ROOT: str = ""
+_BT_CACHE_DIR: str = ""
 
 
 # ═════════════════════════════════════════════════════════
@@ -38,6 +40,7 @@ _BT_DETECTOR: "DetectorConfig | None" = None
 @dataclass
 class ScanConfig:
     data_dir: str = ""
+    data_root: str = ""  # 数据根目录 (包含 tushare-weekly-5d/, trade/, tushare-moneyflow/)
     basic_path: str = ""
     out_dir: str = ""
     scan_date: str = ""
@@ -60,6 +63,9 @@ class ScanConfig:
     # 检测器参数
     detector: DetectorConfig = field(default_factory=DetectorConfig)
 
+    # 特征缓存
+    feature_cache_dir: str = ""  # 为空时不使用缓存
+
     def __post_init__(self):
         """归一化日期字段: 2025/01/01 或 2025-01-01 → 20250101"""
         for attr in ("scan_date", "backtest_start_date", "backtest_end_date"):
@@ -71,6 +77,16 @@ class ScanConfig:
                         v = f"{int(parts[0]):04d}{int(parts[1]):02d}{int(parts[2]):02d}"
                     break
             setattr(self, attr, v)
+
+        # 自动推断 data_root: data_dir 通常是 .../tushare-daily-full
+        if not self.data_root and self.data_dir:
+            import os
+            parent = os.path.dirname(self.data_dir.rstrip("/"))
+            # 验证 parent 包含周线/分钟/资金流目录之一
+            for sub in ("tushare-weekly-5d", "trade", "tushare-moneyflow"):
+                if os.path.isdir(os.path.join(parent, sub)):
+                    self.data_root = parent
+                    break
 
 
 # ═════════════════════════════════════════════════════════
@@ -184,7 +200,7 @@ def scan_single_symbol(
         return None
 
     # 构建特征
-    feats = build_features(df)
+    feats = build_features(df, data_root=cfg.data_root, symbol=symbol, cache_dir=cfg.feature_cache_dir)
     df_daily = feats["daily"]
     df_weekly = feats.get("weekly")
 
@@ -300,7 +316,7 @@ def _bt_scan_worker(args: tuple) -> "SymbolSignal | None":
         return None
 
     try:
-        feats = build_features(df_slice, skip_weekly=True)
+        feats = build_features(df_slice, skip_weekly=True, data_root=_BT_DATA_ROOT, symbol=sym, cache_dir=_BT_CACHE_DIR)
         sig = evaluate_symbol(feats["daily"], feats.get("weekly"), sym, _BT_DETECTOR)
         info = _BT_BASIC.get(sym, {})
         sig.details["name"] = info.get("name", "")
@@ -365,10 +381,12 @@ def run_backtest(
                 start, end, len(scan_dates), cfg.hold_days, len(data_cache))
 
     # ── 将缓存写入模块级全局变量 (fork COW 共享) ──
-    global _BT_CACHE, _BT_BASIC, _BT_DETECTOR
+    global _BT_CACHE, _BT_BASIC, _BT_DETECTOR, _BT_DATA_ROOT, _BT_CACHE_DIR
     _BT_CACHE = data_cache
     _BT_BASIC = basic_info
     _BT_DETECTOR = cfg.detector
+    _BT_DATA_ROOT = cfg.data_root
+    _BT_CACHE_DIR = cfg.feature_cache_dir
 
     n_workers = min(16, max(1, (_mp.cpu_count() or 4) // 2))
     pool = _mp.Pool(n_workers)

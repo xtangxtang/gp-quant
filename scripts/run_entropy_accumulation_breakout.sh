@@ -7,6 +7,7 @@ WORKSPACE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 DEFAULT_DATA_DIR="/nvme5/xtang/gp-workspace/gp-data/tushare-daily-full"
 DEFAULT_BASIC_PATH="/nvme5/xtang/gp-workspace/gp-data/tushare_stock_basic.csv"
 DEFAULT_OUT_DIR="$WORKSPACE_DIR/results/entropy_accumulation_breakout"
+DEFAULT_FEATURE_CACHE_DIR="/nvme5/xtang/gp-workspace/gp-data/feature-cache"
 PYTHON_CMD=(
   /root/miniforge3/bin/conda
   run
@@ -25,6 +26,8 @@ SYMBOLS=""
 MIN_AMOUNT="500000"
 MIN_TURNOVER="0.5"
 EXCLUDE_ST="1"
+FEATURE_CACHE_DIR="$DEFAULT_FEATURE_CACHE_DIR"
+DATA_ROOT=""
 BACKTEST_START_DATE=""
 BACKTEST_END_DATE=""
 HOLD_DAYS="5"
@@ -47,6 +50,8 @@ show_help() {
   echo "  --min-amount <num>       最低成交额过滤 (默认 500000)"
   echo "  --min-turnover <num>     最低换手率过滤 (默认 0.5)"
   echo "  --include-st             不排除 ST 股票"
+  echo "  --feature-cache-dir <dir> 特征缓存目录 (默认: gp-data/feature-cache)"
+  echo "  --data-root <dir>        数据根目录 (自动推断)"
   echo "  --backtest-start-date <yyyymmdd>  回测起始日期"
   echo "  --backtest-end-date <yyyymmdd>    回测结束日期"
   echo "  --hold-days <n>          持有天数 (默认 5)"
@@ -75,6 +80,10 @@ while [[ $# -gt 0 ]]; do
       MIN_TURNOVER="$2"; shift 2 ;;
     --include-st)
       EXCLUDE_ST="0"; shift ;;
+    --feature-cache-dir)
+      FEATURE_CACHE_DIR="$2"; shift 2 ;;
+    --data-root)
+      DATA_ROOT="$2"; shift 2 ;;
     --backtest-start-date)
       BACKTEST_START_DATE="$2"; shift 2 ;;
     --backtest-end-date)
@@ -107,6 +116,14 @@ CMD=(
   --max_positions "$MAX_POSITIONS"
   --max_positions_per_industry "$MAX_POSITIONS_PER_INDUSTRY"
 )
+
+if [[ -n "$FEATURE_CACHE_DIR" ]]; then
+  CMD+=(--feature_cache_dir "$FEATURE_CACHE_DIR")
+fi
+
+if [[ -n "$DATA_ROOT" ]]; then
+  CMD+=(--data_root "$DATA_ROOT")
+fi
 
 if [[ -n "$SCAN_DATE" ]]; then
   CMD+=(--scan_date "$SCAN_DATE")

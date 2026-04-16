@@ -4,13 +4,13 @@ tags: [strategy, entropy, bifurcation, dissipative-structure, accumulation, brea
 confidence: high
 status: active
 created: 2026-04-13
-updated: 2026-04-13
+updated: 2026-04-16
 ---
 
 # 熵惜售分岔突破策略 (Entropy-Accumulation-Breakout)
 
 **源码**: `src/strategy/entropy_accumulation_breakout/`  
-**运行**: `scripts/run_entropy_accumulation_breakout.sh`  
+**运行**: `scripts/run_entropy_accumulation_breakout.sh` 或 Supervisor `entropy_scan` agent  
 **详细文档**: `src/strategy/entropy_accumulation_breakout/README.md`
 
 ## 核心思想
@@ -34,8 +34,8 @@ idle → accumulation → breakout → hold → collapse
 |------|------|---------|
 | 置换熵低位 | `perm_entropy_m < 0.65` | [permutation-entropy](../concepts/permutation-entropy.md) |
 | 路径不可逆性高 | `path_irrev_m > 0.05` | [path-irreversibility](../concepts/path-irreversibility.md) |
-| 成交量萎缩 | `vol_shrink < 0.7` | 流动性收缩 |
-| 波动率压缩 | `vol_compression < 0.8` | 布林带收窄 |
+| 大单累计流入 | `mf_big_cumsum_s > 0` | 资金流向 |
+| 资金流不平衡 | `mf_flow_imbalance > 0.3` | 大单买入散户卖出 |
 
 物理解释：资本流入创造局部有序 → [dissipative-structure](../concepts/dissipative-structure.md) 正在形成。
 
@@ -50,8 +50,10 @@ idle → accumulation → breakout → hold → collapse
 | 近期有惜售 | 过去 10 天内 accumulation = True | Phase 1 |
 | 临界减速 | `dom_eig_m > 0.85` | [dominant-eigenvalue](../concepts/dominant-eigenvalue.md) |
 | 量能脉冲 | `vol_impulse > 1.8` | 能量注入 |
-| 价格位置 | `breakout_range > 0.8` | 区间高位 |
 | 有序突破 | `perm_entropy_m < 0.75` | 排除噪声驱动 |
+| 大单动量 | `mf_big_momentum > 0` | 资金流持续流入 |
+
+额外确认：周线大单累计净额 > 0，分钟线日内置换熵 < 0.70。
 
 关键约束：突破时熵仍需保持低位——这是区分「有序突破」和「噪声假突破」的核心逻辑。
 
@@ -59,14 +61,15 @@ idle → accumulation → breakout → hold → collapse
 
 趋势是 [dissipative-structure](../concepts/dissipative-structure.md)，需要持续能量输入维持。能量停止 → 熵增主导 → 结构瓦解。
 
-任意 2/4 信号同时触发即退出：
+任意 3/5 信号同时触发即退出：
 
 | 信号 | 阈值 | 含义 |
 |------|------|------|
-| 熵飙升 | `perm_entropy_m > 0.85` | 有序结构瓦解 |
-| 不可逆性骤降 | `path_irrev_m < 0.02` | 主力撤离 |
-| 熵加速 | `entropy_accel > 0.03` | 不可控的熵膨胀 |
-| 量能衰竭 | `vol / peak_vol < 0.4` | 能量供给不足 |
+| 熵飙升 | `perm_entropy_m > 0.90` | 有序结构瓦解 |
+| 不可逆性骤降 | `path_irrev_m < 0.01` | 主力撤离 |
+| 熵加速 | `entropy_accel > 0.05` | 不可控的熵膨胀 |
+| 量能衰竭 | `vol / peak_vol < 0.3` | 能量供给不足 |
+| 纯度骤降 | `purity_norm < 0.3` | 共识瓦解 |
 
 安全网：持仓 > 20 天强制退出。
 
@@ -83,7 +86,7 @@ idle → accumulation → breakout → hold → collapse
 
 ## 特征体系
 
-从日线/周线 OHLCV 数据提取 25+ 特征，9 大类：
+从日线/周线/分钟线/资金流多源数据提取 40+ 特征，11 大类：
 
 1. **置换熵** — perm_entropy_{s,m,l}, entropy_slope, entropy_accel
 2. **路径不可逆性** — path_irrev_{m,l}
@@ -92,8 +95,10 @@ idle → accumulation → breakout → hold → collapse
 5. **波动率** — volatility_{m,l}, vol_compression, bbw, bbw_pctl
 6. **成交量** — vol_ratio_s, vol_impulse, vol_shrink
 7. **价格突破** — breakout_up, breakout_range
-8. **资金流** — mf_cumsum_{s,m}, mf_impulse
-9. **大单** — big_net_ratio, big_net_ratio_ma
+8. **资金流** — mf_big_net, mf_big_net_ratio, mf_big_cumsum_{s,m,l}, mf_sm_proportion, mf_flow_imbalance, mf_big_momentum, mf_big_streak
+9. **量子相干性** — coherence_l1, purity_norm, coherence_decay_rate
+10. **周线** — pe_ttm_pctl, pb_pctl, weekly_big_net, weekly_big_net_cumsum, weekly_turnover_shrink
+11. **分钟线** — intraday_perm_entropy, intraday_path_irrev, intraday_vol_concentration
 
 依赖 [tick-entropy-module](tick-entropy-module.md) 的核心计算函数。
 
@@ -107,7 +112,8 @@ $$\text{composite\_score} = 0.4 \times \text{accum\_quality} + 0.6 \times \text{
 
 | 文件 | 功能 |
 |------|------|
-| `feature_engine.py` | 特征引擎：25+ 特征，日线 + 周线双时间框架 |
+| `feature_engine.py` | 多源特征引擎：日线 + 周线 + 分钟线 + 资金流 |
+| `feature_cache.py` | 增量计算缓存 (~17x 加速) |
 | `signal_detector.py` | 三阶段状态检测器 + 质量评分 |
 | `scan_service.py` | 全市场扫描 + 前瞻回测引擎 |
 | `run_entropy_accumulation_breakout.py` | CLI 入口 |
@@ -129,6 +135,23 @@ $$\text{composite\_score} = 0.4 \times \text{accum\_quality} + 0.6 \times \text{
 | [four-layer-system](four-layer-system.md) | 共用 tick_entropy 模块；四层是多条件筛选，本策略是三阶段状态机 |
 | [multitimeframe-scanner](multitimeframe-scanner.md) | 共用多时间框架理念；本策略更聚焦于熵的时序演化 |
 | [hold-exit-system](hold-exit-system.md) | 退出逻辑类似（熵扩散 = 衰竭退出）；本策略增加了结构崩塌的多信号综合判定 |
+
+## Supervisor 集成
+
+`entropy_scan` agent 已注册到 supervisor DAG (priority=5)，每日 17:00 自动运行：
+
+```
+stock_list → daily_financial/market_data → minute → derived → market_trend → entropy_scan
+```
+
+Agent 代码：`src/agents/agent_entropy_scan.py`
+
+## 特征缓存
+
+通过 `feature_cache.py` 启用增量计算：
+- 缓存目录: `{data_root}/feature-cache/daily/` + `weekly/`
+- 首次全量计算 ~40min，后续热缓存 ~4min
+- 启用方式: `--feature_cache_dir /path/to/feature-cache`
 
 ## 概念链接
 

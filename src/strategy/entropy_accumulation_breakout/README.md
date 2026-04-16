@@ -233,6 +233,10 @@ $$C_{l_1}(\rho) = \sum_{i \neq j} |\rho_{ij}|, \quad \dot{C} = \frac{\Delta C_{l
 
 ### 4.3 数据要求
 
+策略支持多源数据融合，通过 `data_root` 参数自动推断各数据目录位置。
+
+#### 日线数据（必需）
+
 | 字段 | 必需 | 说明 |
 |------|------|------|
 | `trade_date` | ✅ | YYYYMMDD 格式 |
@@ -242,6 +246,34 @@ $$C_{l_1}(\rho) = \sum_{i \neq j} |\rho_{ij}|, \quad \dot{C} = \frac{\Delta C_{l
 | `turnover_rate` | 可选 | 换手率，用于换手率熵 |
 | `net_mf_amount` | 可选 | 净资金流入，用于路径不可逆性的 order flow 代理 |
 | `buy_elg/lg_amount`, `sell_elg/lg_amount` | 可选 | 大单买卖额，用于大单净额占比 |
+
+#### 周线数据（可选，增强信号确认）
+
+来源：`{data_root}/tushare-weekly-5d/{symbol}.csv`（预计算 5 日聚合）
+
+| 字段 | 用途 |
+|------|------|
+| `pe_ttm` / `pb` | PE/PB 估值分位数 |
+| `buy_elg_amount` / `sell_elg_amount` | 周级大单净额确认 |
+| `turnover_rate` | 周级换手率收缩 |
+
+#### 分钟线数据（可选，微观结构确认）
+
+来源：`{data_root}/trade/{symbol}/YYYY-MM-DD.csv`
+
+| 字段 | 用途 |
+|------|------|
+| `开盘/收盘/最高/最低` | 日内置换熵、路径不可逆性 |
+| `成交量(手)` | 日内成交量集中度 |
+
+#### 资金流数据（可选，大单/散户分层）
+
+来源：`{data_root}/tushare-moneyflow/{symbol}.csv`
+
+| 字段 | 用途 |
+|------|------|
+| `buy_elg_amount` / `sell_elg_amount` | 大单净额、动量、连续流入 |
+| `buy_sm_amount` / `sell_sm_amount` | 散户占比、流动不平衡度 |
 
 ---
 
@@ -273,12 +305,14 @@ $$C_{l_1}(\rho) = \sum_{i \neq j} |\rho_{ij}|, \quad \dot{C} = \frac{\Delta C_{l
 
 惜售质量分 `accum_quality ∈ [0, 1]`，加权公式：
 
-$$\text{AQ} = 0.35 \times S_{\text{entropy}} + 0.30 \times S_{\text{irrev}} + 0.15 \times S_{\text{big\_net}} + 0.20 \times S_{\text{purity}}$$
+$$\text{AQ} = 0.25 \times S_{\text{entropy}} + 0.20 \times S_{\text{irrev}} + 0.15 \times S_{\text{purity}} + 0.15 \times S_{\text{streak}} + 0.15 \times S_{\text{imbalance}} + 0.10 \times S_{\text{big\_net}}$$
 
 - $S_{\text{entropy}} = 1 - \frac{\text{perm\_entropy\_m}}{1.0}$，越低越好
 - $S_{\text{irrev}} = \frac{\text{path\_irrev\_m}}{0.5}$，越高越好
-- $S_{\text{big\_net}} = \frac{\text{big\_net\_ratio\_ma} + 0.1}{0.2}$，正向流入加分
 - $S_{\text{purity}} = \text{purity\_norm}$，密度矩阵纯度越高 = 状态越集中 = 惜售越明确
+- $S_{\text{streak}} = \frac{\text{mf\_big\_streak}}{10}$，大单连续净流入天数
+- $S_{\text{imbalance}} = \frac{\text{mf\_flow\_imbalance}}{1.0}$，大单买入与散户卖出的不平衡度
+- $S_{\text{big\_net}} = \frac{\text{big\_net\_ratio\_ma} + 0.1}{0.2}$，正向流入加分
 
 ### 5.2 Phase 2: 分岔突破检测
 
@@ -309,9 +343,11 @@ $$\text{AQ} = 0.35 \times S_{\text{entropy}} + 0.30 \times S_{\text{irrev}} + 0.
 
 分岔质量分 `bifurc_quality ∈ [0, 1]`：
 
-$$\text{BQ} = 0.25 \times S_{\text{dom\_eig}} + 0.25 \times S_{\text{vol\_impulse}} + 0.15 \times S_{\text{entropy}} + 0.15 \times S_{\text{irrev}} + 0.20 \times S_{\text{decay}}$$
+$$\text{BQ} = 0.20 \times S_{\text{dom\_eig}} + 0.20 \times S_{\text{vol\_impulse}} + 0.15 \times S_{\text{decay}} + 0.15 \times S_{\text{mf\_momentum}} + 0.10 \times S_{\text{entropy}} + 0.10 \times S_{\text{irrev}} + 0.10 \times S_{\text{mf\_net}}$$
 
 - $S_{\text{decay}} = \text{clip}(-\text{coherence\_decay\_rate}, 0, 0.05) / 0.05$，退相干速率越快（负值越大）= 方向确认越快 = 突破质量越高
+- $S_{\text{mf\_momentum}} = \text{clip}(\text{mf\_big\_momentum}, 0, 1)$，大单资金流动量，正值 = 大单持续流入
+- $S_{\text{mf\_net}} = \text{clip}(\text{mf\_big\_net\_ratio} + 0.1, 0, 0.2) / 0.2$，大单净额占比
 
 ### 5.3 Phase 3: 结构崩塌退出
 
@@ -361,7 +397,7 @@ $$\text{CS} = 0.4 \times \text{AQ} + 0.6 \times \text{BQ}$$
 |---------|------|------|
 | 周线置换熵 | `< 0.75` | 周级别也是有序的，不是日线维度的噪声 |
 
-> **周线数据来源**：不是独立数据源，而是从日线 CSV（`tushare-daily-full/{symbol}.csv`）通过 `aggregate_to_weekly()` 按周五截止重采样聚合而来，再独立计算一遍熵/分岔特征。
+> **周线数据来源**：优先使用预计算周线 `tushare-weekly-5d/{symbol}.csv`（含 PE/PB/大单资金流等日线不具备的字段），回退为从日线 `aggregate_to_weekly()` 聚合。周线同时提供 `weekly_big_net_cumsum`（大单累计净额）作为突破确认的额外维度。
 
 ### 为什么需要周线确认
 
@@ -402,14 +438,26 @@ aggregate_to_weekly(df_daily)
 
 | 特征 | 说明 |
 |------|------|
-| 均线斜率 (20/60日) | MA slope 判断趋势方向 |
-| 均线多头/空头排列 | MA5 > MA10 > MA20 > MA60 |
-| MACD 动量 | DIF、DEA 方向与柱状图 |
-| 布林带宽度 | 波动率收缩/扩张 |
-| 成交量趋势 | 量能萎缩或放大 |
-| RSI 超买超卖 | 极端区域检测 |
+| 均线系统 (MA5/10/20/60/120) | 多空排列计数: ma_bull(0-3), ma_bear(0-3) |
+| 价格相对均线 | price_vs_ma20, price_vs_ma60 — 判断价格在均线上方/下方 |
+| 动量 | ret_5d/10d/20d/60d, momentum_accel (20日收益的变化率) |
+| 波动率 | volatility_10/20/60, vol_ratio (短期/长期波动率比) |
+| 排列熵 | perm_entropy_10/20/60, entropy_slope — 有序/无序度量 |
+| 主特征值 | dom_eig_20/60 — 临界减速检测 |
+| 高低点回撤/反弹 | drawdown_20/60, bounce_20/60 — 距离20/60日高低点的幅度 |
+| 成交量 | vol_ma20, vol_ratio_vs_ma, vol_shrink_5 — 量能萎缩或放大 |
 
-### 7.3 因果安全性
+### 7.3 状态判定规则
+
+判定逻辑按优先级顺序:
+
+1. **DECLINING** (下跌趋势): 空头排列 ≥2 + 价格低于均线 + 近期收益为负 (≥3/5 条件满足)
+2. **RISE_ENDING** (上涨末端): 60日涨幅 >10% + 熵飙升 + 动量减速 + 高位波动率放大 + 高点回撤 (≥4/6 条件满足)
+3. **DECLINE_ENDED** (下跌结束): 前期有跌幅 + 跌幅收窄 + 低位缩量 + 开始企稳 (≥4/6 条件满足)
+4. **RISING** (上涨趋势): 多头排列 ≥2 + 价格在均线上方 + 动量为正 (≥3/5 条件满足)
+5. **CONSOLIDATION** (横盘整理): 不满足上述任何状态的默认归类
+
+### 7.4 因果安全性
 
 所有市场状态特征均使用 **向后看的滚动计算**（rolling windows），不存在前瞻偏差。在回测中市场状态在 T 日仅使用 T 日及之前的数据。
 
@@ -512,6 +560,18 @@ aggregate_to_weekly(df_daily)
 |------|--------|------|
 | `weekly_perm_entropy_max` | 0.75 | 周线置换熵上限 |
 | `weekly_trend_confirm` | True | 是否启用周线趋势确认 |
+| `weekly_big_net_positive` | True | 周线大单累计净额要求为正 |
+
+#### 多源数据特征
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `intraday_entropy_low` | 0.70 | 日内置换熵低于此值确认微观有序 |
+| `intraday_vol_concentration_high` | 0.01 | 日内成交量集中度阈值 |
+| `intraday_irrev_high` | 0.03 | 日内路径不可逆性阈值 |
+| `mf_big_cumsum_positive` | True | 要求大单累计净流入为正 |
+| `mf_flow_imbalance_min` | 0.3 | 资金流不平衡度下限 |
+| `mf_big_streak_min` | 3 | 大单连续净流入最少天数 |
 
 ### 9.2 回测参数 (CLI)
 
@@ -520,6 +580,7 @@ aggregate_to_weekly(df_daily)
 | `data_dir` | tushare-daily-full | `--data_dir` | 日线 CSV 目录 |
 | `basic_path` | tushare_stock_basic.csv | `--basic_path` | 股票基本信息 CSV |
 | `out_dir` | results/.../backtest_2025 | `--out_dir` | 输出目录 |
+| `feature_cache_dir` | 空 (禁用缓存) | `--feature_cache_dir` | 特征缓存目录，启用后 ~17x 加速 |
 | `start_date` | 20250101 | `--start_date` | 回测起始日 |
 | `end_date` | 20251231 | `--end_date` | 回测结束日 |
 | `max_positions` | 5 | `--max_positions` | 组合最大持仓数 |
@@ -538,17 +599,22 @@ aggregate_to_weekly(df_daily)
 ### 10.1 单次扫描
 
 ```bash
-# 使用 shell 脚本
+# 使用 shell 脚本（推荐，带特征缓存加速）
 bash scripts/run_entropy_accumulation_breakout.sh \
-  --scan-date 20260410 \
+  --scan-date 20260416 \
+  --feature-cache-dir /nvme5/xtang/gp-workspace/gp-data/feature-cache \
   --top-n 30
 
 # 或直接用 Python
-python src/strategy/entropy_accumulation_breakout/run_entropy_accumulation_breakout.py \
+python -m src.strategy.entropy_accumulation_breakout.run_entropy_accumulation_breakout \
   --data_dir /nvme5/xtang/gp-workspace/gp-data/tushare-daily-full \
   --out_dir results/entropy_accumulation_breakout \
   --basic_path /nvme5/xtang/gp-workspace/gp-data/tushare_stock_basic.csv \
-  --scan_date 20260410
+  --feature_cache_dir /nvme5/xtang/gp-workspace/gp-data/feature-cache \
+  --scan_date 20260416
+
+# 通过 Supervisor 自动调度（每日 17:00）
+cd src/agents && python supervisor.py --data-dir /nvme5/xtang/gp-workspace/gp-data run --agent entropy_scan
 ```
 
 ### 10.2 小样本测试
@@ -595,13 +661,17 @@ exit_reason (collapse | stop_loss | end_of_backtest), pnl_pct, hold_days, score
 ```
 src/strategy/entropy_accumulation_breakout/
 ├── __init__.py                          # 包初始化
-├── feature_engine.py                    # 特征引擎 (30+ 特征，含量子相干性)
-├── signal_detector.py                   # 三阶段状态检测器 (含退相干速率增强)
+├── feature_engine.py                    # 多源特征引擎 (日线+周线+分钟+资金流)
+├── feature_cache.py                     # 增量计算缓存 (17x 加速)
+├── signal_detector.py                   # 三阶段状态检测器 (含资金流+退相干增强)
 ├── scan_service.py                      # 扫描服务
 ├── market_regime.py                     # 市场状态检测器 (5 状态)
 ├── backtest_fast.py                     # 高速回测引擎 (组合跟踪式)
 ├── run_entropy_accumulation_breakout.py # CLI 入口 (扫描)
 └── README.md                            # 本文档
+
+src/agents/
+└── agent_entropy_scan.py                # Supervisor agent (每日 17:00 自动调度)
 
 scripts/
 └── run_entropy_accumulation_breakout.sh  # Shell 启动脚本
@@ -611,18 +681,23 @@ scripts/
 
 ```
 ── 扫描模式 ──
-Shell 脚本 / 命令行
+Shell 脚本 / 命令行 / Supervisor agent
   └── run_entropy_accumulation_breakout.py  (argparse → ScanConfig)
         └── scan_service.run_scan()  (遍历股票)
-              ├── feature_engine.build_features()  (日线+周线特征)
+              ├── feature_cache.get_cached_daily_features()  (增量缓存)
+              ├── feature_engine.build_features()  (多源特征)
               │     ├── compute_single_timeframe_features(df_daily)
-              │     ├── aggregate_to_weekly(df_daily)
-              │     └── compute_single_timeframe_features(df_weekly)
+              │     ├── load_weekly_precomputed() / aggregate_to_weekly()
+              │     ├── compute_weekly_extra_features()  (PE/PB/大单)
+              │     ├── compute_minute_features()  (日内微观结构)
+              │     ├── load_moneyflow() + compute_moneyflow_features()
+              │     └── feature_cache.save()  (写回缓存)
               └── signal_detector.evaluate_symbol()  (三阶段检测)
-                    ├── detect_accumulation()     → Phase 1
-                    ├── accumulation_quality()     → 质量分
-                    ├── detect_bifurcation_breakout()  → Phase 2
-                    └── bifurcation_quality()      → 质量分
+                    ├── detect_accumulation()     → Phase 1 (含资金流)
+                    ├── accumulation_quality()     → 质量分 (6 因子)
+                    ├── detect_bifurcation_breakout()  → Phase 2 (含动量)
+                    ├── bifurcation_quality()      → 质量分 (7 因子)
+                    └── 周线/分钟线确认             → 多维验证
 
 ── 回测模式 ──
 backtest_fast.py  (argparse → run_fast_backtest)

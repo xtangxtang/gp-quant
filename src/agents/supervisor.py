@@ -74,6 +74,14 @@ AGENT_REGISTRY = {
         "description": "大盘趋势判断（7 维度评分 + 报告）",
         "daily": True,
     },
+    "entropy_scan": {
+        "depends_on": ["derived", "market_data"],
+        "priority": 5,
+        "module": "agent_entropy_scan",
+        "class": "EntropyScanAgent",
+        "description": "熵惜售分岔突破策略每日扫描",
+        "daily": True,
+    },
 }
 
 ALERT_LOG = ".agent_alerts.log"

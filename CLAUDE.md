@@ -32,6 +32,7 @@ gp-quant/
 | Strategy | Timeframe | Status |
 |----------|-----------|--------|
 | `multitimeframe-scanner` | Daily/Weekly/Monthly | Production |
+| `entropy-accumulation-breakout` | Daily (3-stage FSM + multi-source) | Production |
 | `entropy-bifurcation` | Daily (20-day rolling) | Research |
 | `four-layer-system` | Minute-level | Experimental |
 | `dual-entropy-accumulation` | Intraday + Daily | Research |
@@ -74,6 +75,12 @@ pip install -r requirements.txt
 python -m src.strategy.four_layer_entropy_system.run_scan \
   --data_dir /path/to/gp-data/trade \
   --max_stocks 50
+
+# Entropy accumulation breakout (3-stage FSM, with feature cache)
+python -m src.strategy.entropy_accumulation_breakout.run_entropy_accumulation_breakout \
+  --data_dir /path/to/gp-data/tushare-daily-full \
+  --feature_cache_dir /path/to/gp-data/feature-cache \
+  --scan_date 20260416
 ```
 
 ### Backtesting
@@ -140,6 +147,7 @@ python web/app.py --port 5050
 Available via `/skill` command:
 - `backtest-analyze`: Run backtests and analyze performance metrics
 - `entropy-bifurcation`: Run entropy bifurcation scans
+- `entropy-accumulation-breakout`: Entropy accumulation breakout 3-stage FSM
 - `market-scan`: Multi-timeframe resonance scans
 - `hold-exit-decision`: Hold/exit system execution
 - `wiki-ingest`: Generate stock wikis from Xueqiu data
@@ -163,4 +171,5 @@ python -m pytest tests/strategy/continuous_decline_recovery/
 - **Minute data**: Free Tencent source only covers ~3 trading days
 - **Entropy factors**: Only validated on daily timeframe, not minute-level
 - **Results directory**: All outputs go to `results/`, not code directory
+- **Feature cache**: `entropy-accumulation-breakout` uses incremental cache at `gp-data/feature-cache/` (~17x speedup)
 - **Wiki pattern**: LLM maintains `wiki/` as structured knowledge base (read docs/papers/, write wiki/)

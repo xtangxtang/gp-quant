@@ -63,6 +63,15 @@ python -m src.strategy.entropy_accumulation_breakout.run_entropy_accumulation_br
     --feature_cache_dir /nvme5/xtang/gp-workspace/gp-data/feature-cache \
     --backtest_start_date 20250101 --backtest_end_date 20250630
 
+# Bull Hunter v3 大牛股预测 (4-agent LightGBM 流水线)
+python -m src.strategy.factor_model_selection.v3_bull_hunter.run_bull_hunter \
+    --scan_date 20260419
+
+# Bull Hunter v3 回测 (滚动扫描 + 实际收益)
+python -m src.strategy.factor_model_selection.v3_bull_hunter.run_bull_hunter \
+    --backtest --start_date 20250301 --end_date 20251230 \
+    --interval_days 20 --top_n 10
+
 # Web 面板
 python web/app.py --port 5050
 ```
@@ -126,3 +135,4 @@ def load_daily(data_dir, symbol):
 - 已有 Skills (13 个): `.github/skills/*/SKILL.md`
 - 已有 Agents (3 个): `.github/agents/*.agent.md`
 - 特征缓存: `/nvme5/xtang/gp-workspace/gp-data/feature-cache/` (熵惜售策略增量计算缓存)
+- Bull Hunter v3: [src/strategy/factor_model_selection/v3_bull_hunter/README.md](src/strategy/factor_model_selection/v3_bull_hunter/README.md)

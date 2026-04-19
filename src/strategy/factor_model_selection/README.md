@@ -25,12 +25,13 @@
 
 ## 文件结构
 
-| 文件 | 职责 |
-|------|------|
+| 文件 / 目录 | 职责 |
+|-------------|------|
 | `ic_scoring.py` | IC 加权截面评分选股（线性模型，6 个 horizon 各取 Top N） |
 | `factor_model.py` | LightGBM walk-forward 因子模型（非线性，时间衰减加权） |
 | `factor_profiling.py` | 全市场个股因子有效性画像（计算 IC、有效率、方向） |
 | `run_factor_model.py` | 统一 CLI 入口 |
+| `v3_bull_hunter/` | **Bull Hunter v3**: 四 Agent 大牛股预测流水线（详见 [v3_bull_hunter/README.md](v3_bull_hunter/README.md)） |
 | `memory/` | 设计文档 |
 
 ## 数据依赖
@@ -96,6 +97,18 @@ python -m src.strategy.factor_model_selection.factor_model \
   --mode backtest_wf \
   --data_dir /nvme5/xtang/gp-workspace/gp-data/tushare-daily-full \
   --backtest_start_date 20250101 --backtest_end_date 20250630
+```
+
+### 5. Bull Hunter v3 — 大牛股预测
+
+```bash
+# 单日扫描
+python -m src.strategy.factor_model_selection.v3_bull_hunter.run_bull_hunter \
+  --scan_date 20260419
+
+# 滚动回测 (带实际收益验证)
+python -m src.strategy.factor_model_selection.v3_bull_hunter.run_bull_hunter \
+  --backtest --start_date 20250301 --end_date 20251230 --interval_days 20 --top_n 10
 ```
 
 ## 因子体系

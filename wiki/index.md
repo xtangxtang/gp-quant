@@ -40,6 +40,7 @@
 | [entropy-accumulation-breakout](entities/entropy-accumulation-breakout.md) | 熵惜售分岔突破策略（三阶段状态机：惜售→突破→崩塌） | `src/strategy/entropy_accumulation_breakout/` |
 | [web-dashboard](entities/web-dashboard.md) | Web 可视化面板 | `web/` |
 | [market-trend-system](entities/market-trend-system.md) | 大盘趋势判断系统（从小见大：7维度微观聚合宏观） | `src/strategy/market_trend/` |
+| [bull-hunter-v3](entities/bull-hunter-v3.md) | Bull Hunter v3 大牛股预测系统（4-Agent LightGBM 流水线） | `src/strategy/factor_model_selection/v3_bull_hunter/` |
 
 ## 来源 (Sources)
 
@@ -63,6 +64,7 @@
 | [four-layer-backtest-2025](experiments/four-layer-backtest-2025.md) | 四层系统 2025 年日线回测 | 进行中 |
 | [multitimeframe-backtest](experiments/multitimeframe-backtest.md) | 多时间框架共振回测 | 进行中 |
 | [market-trend-backtest-2024](experiments/market-trend-backtest-2024.md) | 大盘趋势回测 2023H2-2026Q2 (672天) | ✅ 完成: STRONG_DOWN后20日涨+3.25% |
+| [bull-hunter-v3-backtest-2025](experiments/bull-hunter-v3-backtest-2025.md) | Bull Hunter v3 滚动回测 2025Q1-Q4 (11次扫描) | ✅ 完成: 120d均值+28%, 胜率74% |
 
 ## 决策 (Decisions)
 
@@ -73,4 +75,4 @@
 
 ---
 
-*最后更新: 2026-04-13 — 新增大盘趋势判断系统 + 2023H2-2026Q2回测分析*
+*最后更新: 2026-04-19 — 新增 Bull Hunter v3 大牛股预测系统 + 2025 滚动回测*

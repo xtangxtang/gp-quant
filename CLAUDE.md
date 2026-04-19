@@ -18,7 +18,8 @@ gp-quant/
 │   │   ├── four_layer_entropy_system/  # Minute-level 4-layer trading system
 │   │   ├── dual_entropy_accumulation/  # Intraday + daily entropy fusion
 │   │   ├── continuous_decline_recovery/ # Mean reversion after decline
-│   │   └── uptrend_hold_state_flow/    # State-flow based hold/exit
+│   │   ├── uptrend_hold_state_flow/    # State-flow based hold/exit
+│   │   └── factor_model_selection/     # Factor model + Bull Hunter v3
 │   ├── downloader/                # Tushare/Tencent data sync
 │   └── web/                       # Flask dashboard (auto-discovers strategies)
 ├── wiki/                          # LLM-maintained knowledge base (Karpathy Wiki pattern)
@@ -38,6 +39,7 @@ gp-quant/
 | `dual-entropy-accumulation` | Intraday + Daily | Research |
 | `continuous-decline-recovery` | Daily | Research |
 | `hold-exit-system` | Daily | Research |
+| `bull-hunter-v3` | Daily (LightGBM 30%/100%/200%) | Research |
 
 ## Environment & Commands
 
@@ -81,6 +83,15 @@ python -m src.strategy.entropy_accumulation_breakout.run_entropy_accumulation_br
   --data_dir /path/to/gp-data/tushare-daily-full \
   --feature_cache_dir /path/to/gp-data/feature-cache \
   --scan_date 20260416
+
+# Bull Hunter v3 (LightGBM 4-agent pipeline: 30%/100%/200% targets)
+python -m src.strategy.factor_model_selection.v3_bull_hunter.run_bull_hunter \
+  --scan_date 20260419
+
+# Bull Hunter v3 backtest with actual P&L
+python -m src.strategy.factor_model_selection.v3_bull_hunter.run_bull_hunter \
+  --backtest --start_date 20250301 --end_date 20251230 \
+  --interval_days 20 --top_n 10
 ```
 
 ### Backtesting

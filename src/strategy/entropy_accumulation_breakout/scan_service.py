@@ -15,10 +15,10 @@ import numpy as np
 import pandas as pd
 
 from .feature_engine import build_features
-from .signal_detector import (
-    DetectorConfig,
+from .signal_detector_v2 import (
+    DetectorConfigV2 as DetectorConfig,
     SymbolSignal,
-    detect_structural_collapse,
+    detect_exit_v2 as detect_structural_collapse,
     evaluate_symbol,
 )
 from src.core.tick_entropy import permutation_entropy as _pe_fast

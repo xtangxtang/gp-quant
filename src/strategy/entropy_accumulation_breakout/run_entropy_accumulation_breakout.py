@@ -10,8 +10,11 @@
 
 import argparse
 import logging
+import os
 import sys
 from pathlib import Path
+
+import pandas as pd
 
 if __package__:
     from .scan_service import ScanConfig, run_scan, run_backtest, write_results
@@ -49,6 +52,8 @@ def _build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max_positions", type=int, default=10, help="最大持仓数")
     parser.add_argument("--max_positions_per_industry", type=int, default=2, help="每行业最大持仓")
     parser.add_argument("--feature_cache_dir", type=str, default="", help="特征缓存目录 (启用增量计算)")
+    parser.add_argument("--mode", type=str, default="fsm", choices=["fsm"],
+                        help="选股模式: fsm=三阶段状态机(v2)")
     parser.add_argument("--verbose", action="store_true", help="打印详细日志")
     return parser
 
@@ -83,7 +88,7 @@ def main() -> None:
         feature_cache_dir=args.feature_cache_dir,
     )
 
-    # ── 扫描 ──
+    # ── 扫描 (三阶段状态机) ──
     all_result, top_picks = run_scan(cfg)
     print(f"\n{'='*60}")
     print(f"  扫描日期: {cfg.scan_date or 'auto'}")

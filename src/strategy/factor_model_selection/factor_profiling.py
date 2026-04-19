@@ -5,7 +5,7 @@
 详见 FACTOR_PROFILING.md。
 
 用法:
-  python -m src.strategy.entropy_accumulation_breakout.factor_profiling \
+  python -m src.strategy.factor_model_selection.factor_profiling \
     --cache_dir /path/to/feature-cache \
     --out_dir results/factor_profiling \
     [--forward_days 3] [--decay_lambda 0.007] [--symbols sh600519] [--top_n 50]
@@ -726,6 +726,137 @@ def run_profiling(cfg: ProfilingConfig):
                             ic_matrix, all_results, ic_std_per_factor,
                             weekly_factor_summary=weekly_factor_summary,
                             weekly_ic_matrix=weekly_ic_matrix)
+
+    # ------ 生成 IC 权重配置 (供 signal_detector_v3 自动读取) ------
+    _generate_ic_config(all_results, weekly_results, cfg, stock_dir)
+
+
+# ---------------------------------------------------------------------------
+# IC 权重配置生成 (供 signal_detector_v3 自动读取)
+# ---------------------------------------------------------------------------
+
+DAILY_HORIZONS = ["1d", "3d", "5d"]
+WEEKLY_HORIZONS = ["1w", "3w", "5w"]
+_ALL_HORIZONS = DAILY_HORIZONS + WEEKLY_HORIZONS
+
+
+def _generate_ic_config(
+    all_results: list,
+    weekly_results: list,
+    cfg: ProfilingConfig,
+    profile_dir: str,
+    min_ic_abs: float = 0.02,
+    min_stocks: int = 50,
+):
+    """
+    从全市场个股 IC 计算每个 (horizon, factor) 的中位 IC,
+    写入 ic_weights.json。signal_detector_v3 读取该文件即可,
+    无需逐个加载 5169 个 JSON。
+
+    输出格式:
+    {
+      "generated_at": "20260417",
+      "n_stocks_daily": 4800,
+      "n_stocks_weekly": 4500,
+      "min_ic_abs": 0.02,
+      "min_stocks": 50,
+      "horizons": {
+        "1d": {"mf_sm_proportion": 0.06, "breakout_range": -0.0517, ...},
+        "3d": {...}, "5d": {...}, "1w": {...}, "3w": {...}, "5w": {...}
+      },
+      "factor_stats": {
+        "1d": {
+          "mf_sm_proportion": {"median_ic": 0.06, "mean_ic": 0.055, "std_ic": 0.12, "n": 3200, "pct_positive": 0.65},
+          ...
+        }, ...
+      }
+    }
+    """
+    ic_collector: dict[str, dict[str, list[float]]] = {h: {} for h in _ALL_HORIZONS}
+
+    # 收集日线 IC
+    for res in all_results:
+        mfi = res.get("multi_forward_ic", {})
+        for h in DAILY_HORIZONS:
+            ics = mfi.get(h, {})
+            for factor, ic_val in ics.items():
+                if np.isfinite(ic_val):
+                    ic_collector[h].setdefault(factor, []).append(ic_val)
+
+    # 收集周线 IC
+    for res in weekly_results:
+        w = res.get("weekly") or {}
+        wmfi = w.get("multi_forward_ic", {})
+        for h in WEEKLY_HORIZONS:
+            ics = wmfi.get(h, {})
+            for factor, ic_val in ics.items():
+                if np.isfinite(ic_val):
+                    ic_collector[h].setdefault(factor, []).append(ic_val)
+
+    # 计算权重和统计
+    horizons_weights = {}
+    factor_stats = {}
+
+    for h in _ALL_HORIZONS:
+        horizons_weights[h] = {}
+        factor_stats[h] = {}
+
+        for factor, ic_list in ic_collector[h].items():
+            arr = np.array(ic_list)
+            n = len(arr)
+            median_ic = float(np.median(arr))
+            mean_ic = float(np.mean(arr))
+            std_ic = float(np.std(arr))
+            pct_positive = float((arr > 0).mean())
+
+            factor_stats[h][factor] = {
+                "median_ic": round(median_ic, 6),
+                "mean_ic": round(mean_ic, 6),
+                "std_ic": round(std_ic, 6),
+                "n": n,
+                "pct_positive": round(pct_positive, 4),
+            }
+
+            if n >= min_stocks and abs(median_ic) >= min_ic_abs:
+                horizons_weights[h][factor] = round(median_ic, 6)
+
+    # 按 |IC| 降序排列权重
+    for h in _ALL_HORIZONS:
+        horizons_weights[h] = dict(
+            sorted(horizons_weights[h].items(), key=lambda x: abs(x[1]), reverse=True)
+        )
+
+    config = {
+        "generated_at": datetime.now().strftime("%Y%m%d_%H%M%S"),
+        "n_stocks_daily": len(all_results),
+        "n_stocks_weekly": len(weekly_results),
+        "min_ic_abs": min_ic_abs,
+        "min_stocks": min_stocks,
+        "forward_days": cfg.forward_days,
+        "forward_weeks": cfg.forward_weeks,
+        "decay_lambda": cfg.decay_lambda,
+        "weekly_decay_lambda": cfg.weekly_decay_lambda,
+        "horizons": horizons_weights,
+        "factor_stats": factor_stats,
+    }
+
+    config_path = os.path.join(profile_dir, "ic_weights.json")
+    with open(config_path, "w", encoding="utf-8") as f:
+        json.dump(config, f, ensure_ascii=False, indent=2)
+
+    # 打印摘要
+    print("\n" + "=" * 70)
+    print("IC 权重配置已生成 (供 v3 选股自动读取)")
+    print("=" * 70)
+    for h in _ALL_HORIZONS:
+        hw = horizons_weights[h]
+        print(f"  {h}: {len(hw)} effective factors")
+        for factor, ic in list(hw.items())[:3]:
+            direction = "↑" if ic > 0 else "↓"
+            print(f"    {direction} {factor}: {ic:+.4f}")
+        if len(hw) > 3:
+            print(f"    ... ({len(hw) - 3} more)")
+    print(f"\n  → {config_path}")
 
 
 # ---------------------------------------------------------------------------

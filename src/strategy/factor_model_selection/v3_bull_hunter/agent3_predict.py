@@ -108,15 +108,11 @@ def run_prediction(
         else:
             feature_cols = [f for f in DAILY_FACTORS if f in factor_snapshot.columns]
 
-        X_rows = []
-        for sym in symbols:
-            row_vals = []
-            for f in feature_cols:
-                v = factor_snapshot.loc[sym].get(f, np.nan) if f in factor_snapshot.columns else np.nan
-                row_vals.append(float(v) if pd.notna(v) else 0.0)
-            X_rows.append(row_vals)
+        # 向量化构建特征矩阵 (保持 feature_cols 原始顺序)
+        X = factor_snapshot.reindex(columns=feature_cols, fill_value=0.0).loc[symbols]
+        X = X.values.astype(np.float64)
+        X = np.nan_to_num(X, nan=0.0)
 
-        X = np.array(X_rows)
         probas = model.predict_proba(X)[:, 1]
         prob_col = f"prob_{tname.replace('pct', '')}"
         results[prob_col] = probas.tolist()

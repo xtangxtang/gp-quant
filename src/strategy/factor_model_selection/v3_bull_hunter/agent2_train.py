@@ -52,7 +52,7 @@ TARGETS = {
 # 训练间隔 (交易日数)
 TRAIN_INTERVAL_DAYS = 5  # 每周
 # 最大保留模型版本数
-MAX_MODEL_VERSIONS = 8
+MAX_MODEL_VERSIONS = 20
 
 DAILY_FACTORS = [
     "perm_entropy_s", "perm_entropy_m", "perm_entropy_l",
@@ -298,6 +298,74 @@ def get_latest_model_dir(cache_dir: str) -> str | None:
     dirs = [d for d in sorted(os.listdir(root)) if d != "latest" and os.path.isdir(os.path.join(root, d))]
     if dirs:
         return os.path.join(root, dirs[-1])
+    return None
+
+
+def _is_model_loadable(model_dir: str) -> bool:
+    """检查模型是否可加载 (model_type 兼容当前环境)。"""
+    meta_path = os.path.join(model_dir, "meta.json")
+    if not os.path.exists(meta_path):
+        return True  # 无 meta 默认可用
+    try:
+        with open(meta_path) as f:
+            meta = json.load(f)
+        # 检查任意一个 target 的 model_type
+        for key in ("30pct", "100pct", "200pct"):
+            if key in meta and isinstance(meta[key], dict):
+                mtype = meta[key].get("model_type", "lgbm")
+                if mtype == "xgboost":
+                    try:
+                        import xgboost  # noqa: F401
+                    except ImportError:
+                        return False
+                break
+    except Exception:
+        pass
+    return True
+
+
+def get_model_for_date(cache_dir: str, scan_date: str) -> str | None:
+    """
+    获取 scan_date 可用的最新模型 (训练日期 <= scan_date, 避免前瞻偏差)。
+
+    在回测中使用: 逐日选择当时已训练好的模型。
+    支持目录名格式: 纯日期 (20250101) 或 Agent 4 重训 (20250103_retrain)。
+    自动跳过当前环境无法加载的模型 (如 xgboost 未安装)。
+    """
+    root = os.path.join(cache_dir, "bull_models")
+    if not os.path.exists(root):
+        return None
+
+    def _extract_date(dirname: str) -> str | None:
+        """从目录名提取日期部分: '20250103' → '20250103', '20250103_retrain' → '20250103'"""
+        base = dirname.split("_")[0]
+        if base.isdigit() and len(base) == 8:
+            return base
+        return None
+
+    # 收集所有模型目录及其日期
+    candidates = []
+    for d in os.listdir(root):
+        if d == "latest" or not os.path.isdir(os.path.join(root, d)):
+            continue
+        date_part = _extract_date(d)
+        if date_part and date_part <= scan_date:
+            candidates.append((date_part, d))
+
+    if not candidates:
+        return None
+
+    # 按日期排序, 同日期下 _retrain 优先于原始模型
+    candidates.sort(key=lambda x: (x[0], "_retrain" in x[1]))
+
+    # 从最新往回找, 跳过不可加载的模型 (如 xgboost 未安装)
+    for _, dirname in reversed(candidates):
+        full_path = os.path.join(root, dirname)
+        if _is_model_loadable(full_path):
+            return full_path
+        else:
+            logger.warning(f"  跳过不兼容模型: {dirname} (需要 xgboost)")
+
     return None
 
 

@@ -14,6 +14,14 @@ v4 模式:
   python -m src.strategy.factor_model_selection.v3_bull_hunter.run_bull_hunter \
       --review --scan_date 20260420
 
+  # Live 模式 (Agent 5/6/7 持仓管理闭环)
+  python -m src.strategy.factor_model_selection.v3_bull_hunter.run_bull_hunter \
+      --live --scan_date 20260420
+
+  # Live 回测 (逐日模拟买卖持仓)
+  python -m src.strategy.factor_model_selection.v3_bull_hunter.run_bull_hunter \
+      --live-backtest --start_date 20250101 --end_date 20251230
+
   # 回测
   python -m src.strategy.factor_model_selection.v3_bull_hunter.run_bull_hunter \
       --backtest --start_date 20250101 --end_date 20251230
@@ -31,10 +39,13 @@ import os
 import sys
 
 from .pipeline import (
-    PipelineConfig, run_backtest, run_daily, run_review, run_scan, run_train,
+    PipelineConfig, run_backtest, run_daily, run_live, run_live_backtest,
+    run_review, run_scan, run_train,
 )
 from .agent2_train import TrainConfig
 from .agent3_predict import PredictConfig
+from .agent5_portfolio import PortfolioConfig
+from .agent6_exit_signal import ExitSignalConfig
 
 
 def main():
@@ -47,6 +58,10 @@ def main():
                         help="训练模式: Agent 1 + Agent 2, 更新 latest 模型")
     parser.add_argument("--review", action="store_true",
                         help="复盘模式: Agent 4 双回路评估 + 可能触发重训")
+    parser.add_argument("--live", action="store_true",
+                        help="Live 模式: Agent 1→3→6→5→7 持仓管理闭环")
+    parser.add_argument("--live-backtest", action="store_true",
+                        help="Live 回测: 逐日模拟 live 循环, 验证持仓管理效果")
     parser.add_argument("--backtest", action="store_true",
                         help="回测模式: 滚动扫描 + 实际收益验证")
     parser.add_argument("--scan_date", type=str, default="",
@@ -81,6 +96,24 @@ def main():
     # 回测参数
     parser.add_argument("--interval_days", type=int, default=20)
 
+    # Agent 5 (Portfolio) 参数
+    parser.add_argument("--sell_threshold", type=float, default=0.6,
+                        help="Agent 6 卖出权重阈值 (默认 0.6)")
+    parser.add_argument("--stop_loss", type=float, default=-0.15,
+                        help="止损线 (默认 -0.15)")
+    parser.add_argument("--max_positions", type=int, default=10,
+                        help="最大持仓数 (默认 10)")
+    parser.add_argument("--initial_capital", type=float, default=1000000,
+                        help="初始资金 (默认 1000000)")
+
+    # Live 回测整合参数
+    parser.add_argument("--retrain_interval", type=int, default=60,
+                        help="Agent 2 重训间隔天数 (0=不重训, 默认 60)")
+    parser.add_argument("--monitor_interval", type=int, default=20,
+                        help="Agent 4 选股纠正监控间隔天数 (0=禁用, 默认 20)")
+    parser.add_argument("--no_exit_train", action="store_true",
+                        help="禁用 Agent 6 退出模型训练")
+
     # LLM
     parser.add_argument("--use-llm", action="store_true",
                         help="启用 LLM 因子顾问")
@@ -103,6 +136,12 @@ def main():
         threshold_200pct=args.threshold_200,
         top_n=args.top_n,
     )
+    portfolio_cfg = PortfolioConfig(
+        sell_weight_threshold=args.sell_threshold,
+        stop_loss_pct=args.stop_loss,
+        max_positions=args.max_positions,
+    )
+    exit_cfg = ExitSignalConfig()
     pipe_cfg = PipelineConfig(
         cache_dir=args.cache_dir,
         data_dir=args.data_dir,
@@ -110,6 +149,8 @@ def main():
         results_dir=args.results_dir,
         train_cfg=train_cfg,
         predict_cfg=predict_cfg,
+        portfolio_cfg=portfolio_cfg,
+        exit_cfg=exit_cfg,
         use_llm=args.use_llm,
     )
 
@@ -133,6 +174,25 @@ def main():
         health = run_review(args.scan_date, pipe_cfg)
         _print_review_result(health, args)
 
+    elif args.live:
+        if not args.scan_date:
+            print("ERROR: --live 需要 --scan_date")
+            sys.exit(1)
+        result = run_live(args.scan_date, pipe_cfg)
+        _print_live_result(result, args)
+
+    elif args.live_backtest:
+        if not args.start_date or not args.end_date:
+            print("ERROR: --live-backtest 需要 --start_date 和 --end_date")
+            sys.exit(1)
+        result = run_live_backtest(
+            args.start_date, args.end_date, pipe_cfg,
+            retrain_interval=args.retrain_interval,
+            enable_exit_train=not args.no_exit_train,
+            monitor_interval=args.monitor_interval,
+        )
+        _print_live_backtest_summary(result, args)
+
     elif args.backtest:
         if not args.start_date or not args.end_date:
             print("ERROR: --backtest 需要 --start_date 和 --end_date")
@@ -150,8 +210,100 @@ def main():
         _print_scan_result(result, args)
 
     else:
-        print("ERROR: 需要 --daily, --train, --review, --backtest 或 --scan_date")
+        print("ERROR: 需要 --daily, --train, --review, --live, --live-backtest, --backtest 或 --scan_date")
         sys.exit(1)
+
+
+def _print_live_result(result, args):
+    """打印 Live 模式结果。"""
+    if not result:
+        print("Live 运行无结果")
+        return
+
+    print(f"\n{'='*60}")
+    print(f"  Bull Hunter v4 — Live 持仓管理")
+    print(f"  日期: {args.scan_date}")
+    print(f"{'='*60}")
+
+    pr = result.get("portfolio_result", {})
+
+    # 买入
+    buys = pr.get("buys", [])
+    if buys:
+        print(f"\n  📈 买入 ({len(buys)} 只):")
+        for b in buys:
+            print(f"    {b['symbol']} {b.get('name', ''):<8s} | "
+                  f"{b['shares']}股 @ {b['price']:.2f}")
+
+    # 卖出
+    sells = pr.get("sells", [])
+    if sells:
+        print(f"\n  📉 卖出 ({len(sells)} 只):")
+        for s in sells:
+            emoji = "✅" if s.get("pnl", 0) >= 0 else "❌"
+            print(f"    {emoji} {s['symbol']} {s.get('name', ''):<8s} | "
+                  f"盈亏 {s.get('pnl_pct', 0):+.1%} | "
+                  f"持有 {s.get('holding_days', 0)}天 | "
+                  f"原因: {s.get('reason', '')}")
+
+    # 持有
+    holds = pr.get("hold", [])
+    if holds:
+        print(f"\n  💼 持有 ({len(holds)} 只):")
+        for h in holds:
+            sw = h.get("sell_weight", 0)
+            cg = h.get("current_gain", 0)
+            sw_bar = "🟢" if sw < 0.3 else "🟡" if sw < 0.6 else "🔴"
+            print(f"    {h['symbol']} {h.get('name', ''):<8s} | "
+                  f"涨幅 {cg:+.1%} | 持有 {h.get('days_held', 0)}天 | "
+                  f"卖出权重 {sw_bar} {sw:.2f}")
+
+    # Supervisor 状态
+    sr = result.get("supervisor_result", {})
+    status = sr.get("status", "healthy")
+    status_cn = {"healthy": "✅ 健康", "warning": "⚠️ 警告", "critical": "🔴 严重"}.get(status, status)
+    print(f"\n  Agent 7 状态: {status_cn}")
+
+    # 汇总
+    summary = pr.get("portfolio_summary", {})
+    stats = summary.get("trade_stats", {})
+    if stats.get("n_trades", 0) > 0:
+        print(f"  累计: {stats['n_trades']} 笔交易, "
+              f"胜率 {stats.get('win_rate', 0):.0%}, "
+              f"平均 {stats.get('avg_pnl_pct', 0):+.1%}")
+
+    print(f"\n  仓位: {summary.get('n_positions', 0)} 只, "
+          f"现金: {summary.get('cash', 0):,.0f}")
+    print(f"{'='*60}")
+
+
+def _print_live_backtest_summary(result, args):
+    """打印 Live 回测摘要。"""
+    if not result:
+        print("Live 回测无结果")
+        return
+
+    stats = result.get("stats", {})
+
+    print(f"\n{'='*60}")
+    print(f"  Bull Hunter v4 — Live 回测报告")
+    print(f"  回测区间: {args.start_date} ~ {args.end_date}")
+    print(f"{'='*60}")
+
+    print(f"\n  交易统计:")
+    print(f"    总交易笔数: {stats.get('n_trades', 0)}")
+    print(f"    胜率:       {stats.get('win_rate', 0):.1%}")
+    print(f"    平均盈亏:   {stats.get('avg_pnl_pct', 0):+.1%}")
+    print(f"    总盈亏:     {stats.get('total_pnl', 0):+,.0f}")
+    print(f"    平均持有:   {stats.get('avg_holding_days', 0):.1f} 天")
+    print(f"    最佳交易:   {stats.get('best_trade', 0):+.1%}")
+    print(f"    最差交易:   {stats.get('worst_trade', 0):+.1%}")
+
+    results_dir = result.get("results_dir", "")
+    if results_dir:
+        print(f"\n  📁 结果目录: {results_dir}/")
+
+    print(f"{'='*60}")
 
 
 def _print_daily_result(result, args):

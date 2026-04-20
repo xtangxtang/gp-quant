@@ -2,6 +2,7 @@
 Bull Hunter v3 — Pipeline 编排器
 
 v4 重构: 三种运行模式 + tracker 跟踪 + 双回路反馈。
+v5 扩展: 新增 live 模式 (Agent 5/6/7 持仓管理闭环)。
 
 模式:
   1. daily  — 每日轻量预测: Agent 1 + Agent 3 (复用 latest 模型), 记录到 tracker
@@ -9,6 +10,7 @@ v4 重构: 三种运行模式 + tracker 跟踪 + 双回路反馈。
   3. review — Agent 4 双回路评估: 漏网之鱼 + 跟踪到期, 可能触发 Agent 2 重训
   4. scan   — 完整单日: train + daily (兼容旧接口)
   5. backtest — 滚动回测 + 实际收益验证
+  6. live   — 每日 live 循环: Agent 1→3→6→5→7 (持仓管理闭环)
 """
 
 from __future__ import annotations
@@ -22,9 +24,13 @@ from dataclasses import dataclass, replace
 import pandas as pd
 
 from .agent1_factor import run_factor_generation
-from .agent2_train import TrainConfig, run_training, needs_training, get_latest_model_dir, _build_calendar
+from .agent2_train import TrainConfig, run_training, needs_training, get_latest_model_dir, get_model_for_date, _build_calendar
 from .agent3_predict import PredictConfig, run_prediction
 from .agent4_monitor import run_monitor
+from .agent5_portfolio import PortfolioConfig, run_portfolio_decisions
+from .agent6_exit_signal import ExitSignalConfig, run_exit_signal, train_exit_model
+from .agent7_supervisor import run_supervisor, apply_directives
+from .portfolio import Portfolio
 from .tracker import PredictionTracker
 
 logger = logging.getLogger(__name__)
@@ -39,6 +45,8 @@ class PipelineConfig:
     results_dir: str = "results/bull_hunter"
     train_cfg: TrainConfig | None = None
     predict_cfg: PredictConfig | None = None
+    portfolio_cfg: PortfolioConfig | None = None
+    exit_cfg: ExitSignalConfig | None = None
     use_llm: bool = False
 
 
@@ -549,6 +557,415 @@ def _apply_llm_final_filter(
         logger.info(f"  ❌ {sym}: {reason[:60]}")
 
     return filtered
+
+
+# ──────────────────────────────────────────────────────────
+#  Mode 6: Live 模式 (持仓管理闭环)
+# ──────────────────────────────────────────────────────────
+
+def run_live(
+    scan_date: str,
+    cfg: PipelineConfig | None = None,
+    preloaded: dict | None = None,
+    skip_train: bool = False,
+    override_model_dir: str | None = None,
+) -> dict:
+    """
+    每日 Live 循环: Agent 1→3→6→5→7, 持仓管理闭环。
+
+    流程:
+      1. Agent 1: 因子快照
+      2. Agent 2 (按需): 检查是否需要周训
+      3. Agent 3: Top 5 候选
+      4. Agent 6: 对已持仓计算卖出权重
+      5. Agent 5: 先卖后买 (消费 Agent 3 候选 + Agent 6 权重)
+      6. Agent 7: 评估今日决策 + 生成调优指令 → 反馈 Agent 5/6
+
+    Args:
+        override_model_dir: 强制指定模型目录 (回测时用于模型轮换, 避免前瞻偏差)
+
+    Returns:
+        {
+            "predictions": DataFrame,
+            "portfolio_result": {...},
+            "supervisor_result": {...},
+            "config_updated": bool,
+        }
+    """
+    cfg = cfg or PipelineConfig()
+    predict_cfg = cfg.predict_cfg or PredictConfig()
+    portfolio_cfg = cfg.portfolio_cfg or PortfolioConfig()
+    exit_cfg = cfg.exit_cfg or ExitSignalConfig()
+
+    logger.info(f"=== Bull Hunter v4 LIVE: {scan_date} ===")
+
+    # 构建日历 + 基础组件
+    calendar = _build_calendar(cfg.cache_dir)
+    portfolio_dir = os.path.join(cfg.results_dir, "portfolio")
+    portfolio = Portfolio(portfolio_dir)
+
+    # ── Agent 2 (按需): 周训 ──
+    if not skip_train and needs_training(cfg.cache_dir, scan_date):
+        logger.info("── Agent 2: 触发周训 ──")
+        run_train(scan_date, cfg, trigger="weekly")
+
+    # ── 获取模型 ──
+    if override_model_dir:
+        model_dir = override_model_dir
+    else:
+        model_dir = get_latest_model_dir(cfg.cache_dir)
+    if model_dir is None:
+        logger.error("无可用模型 (latest 不存在), 请先运行 --train")
+        return {}
+    logger.info(f"  使用模型: {os.path.basename(model_dir)}")
+
+    # ── Agent 1: 因子快照 ──
+    logger.info("── Agent 1: 因子快照 ──")
+    snapshot = run_factor_generation(
+        cache_dir=cfg.cache_dir,
+        data_dir=cfg.data_dir,
+        scan_date=scan_date,
+        basic_path=cfg.basic_path,
+        preloaded=preloaded,
+    )
+    if snapshot.empty:
+        logger.error("Agent 1 返回空快照, 终止")
+        return {}
+    logger.info(f"  → {len(snapshot)} 只股票")
+
+    # ── Agent 3: Top 5 候选 ──
+    logger.info("── Agent 3: Top 5 预测 ──")
+    tracker = PredictionTracker(os.path.join(cfg.results_dir, "tracking"))
+    recent = tracker.get_recent_predictions(scan_date, calendar, predict_cfg.dedup_days)
+
+    predictions = run_prediction(
+        factor_snapshot=snapshot,
+        model_dir=model_dir,
+        scan_date=scan_date,
+        cfg=predict_cfg,
+        recent_predictions=recent,
+    )
+
+    if not predictions.empty:
+        model_date = os.path.basename(os.path.realpath(model_dir))
+        tracker.record_predictions(predictions, scan_date, cfg.data_dir, calendar, model_date)
+    logger.info(f"  → {len(predictions)} 只 A 级候选")
+
+    # ── Agent 6: 卖出因子评估 ──
+    logger.info("── Agent 6: 卖出因子评估 ──")
+    positions = portfolio.get_positions()
+    sell_weights = run_exit_signal(
+        positions=positions,
+        factor_snapshot=snapshot,
+        current_date=scan_date,
+        data_dir=cfg.data_dir,
+        calendar=calendar,
+        portfolio_dir=portfolio_dir,
+        cfg=exit_cfg,
+    )
+
+    # ── Agent 5: 买卖执行 ──
+    logger.info("── Agent 5: 组合决策 ──")
+    portfolio_result = run_portfolio_decisions(
+        candidates=predictions,
+        sell_weights=sell_weights,
+        portfolio=portfolio,
+        current_date=scan_date,
+        data_dir=cfg.data_dir,
+        calendar=calendar,
+        cfg=portfolio_cfg,
+    )
+
+    # ── Agent 7: 监控评估 + 反馈 ──
+    logger.info("── Agent 7: 监控评估 ──")
+    supervisor_result = run_supervisor(
+        portfolio_dir=portfolio_dir,
+        data_dir=cfg.data_dir,
+        current_date=scan_date,
+        calendar=calendar,
+        portfolio_cfg=portfolio_cfg,
+        exit_cfg=exit_cfg,
+        today_result=portfolio_result,
+    )
+
+    # ── 应用 Agent 7 调优指令 ──
+    config_updated = False
+    a5_dir = supervisor_result.get("agent5_directives", {})
+    a6_dir = supervisor_result.get("agent6_directives", {})
+
+    if a5_dir.get("actions") or a6_dir.get("actions"):
+        logger.info("── 应用 Agent 7 调优指令 ──")
+        portfolio_cfg, exit_cfg = apply_directives(
+            portfolio_cfg, exit_cfg, a5_dir, a6_dir, portfolio_dir,
+        )
+        config_updated = True
+
+    # 如果 Agent 7 触发 Agent 6 重训
+    if supervisor_result.get("should_retrain_exit"):
+        logger.info("── Agent 6: 重训卖出模型 ──")
+        train_exit_model(portfolio_dir, cfg.data_dir, calendar, exit_cfg)
+
+    # Tracker 维护
+    tracker.update_prices(scan_date, cfg.data_dir, calendar)
+    tracker.evaluate_expired(scan_date, calendar)
+
+    logger.info(f"=== LIVE 完成: 买入 {len(portfolio_result.get('buys', []))} 只, "
+                f"卖出 {len(portfolio_result.get('sells', []))} 只, "
+                f"持有 {len(portfolio_result.get('hold', []))} 只, "
+                f"Supervisor={supervisor_result.get('status', 'healthy')} ===")
+
+    return {
+        "predictions": predictions,
+        "factor_snapshot": snapshot,
+        "portfolio_result": portfolio_result,
+        "supervisor_result": supervisor_result,
+        "config_updated": config_updated,
+    }
+
+
+def run_live_backtest(
+    start_date: str,
+    end_date: str,
+    cfg: PipelineConfig | None = None,
+    retrain_interval: int = 60,
+    enable_exit_train: bool = True,
+    monitor_interval: int = 20,
+) -> dict:
+    """
+    完整整合回测: 选股 (Agent 1→2→3) + 买卖 (Agent 5→6→7) 全闭环。
+
+    与旧版 run_live_backtest 不同:
+      - 旧版: skip_train=True, 全年只用一个模型
+      - 新版: 模型轮换 (自动选当前日期可用的最新模型) + 周期重训 + Agent 6 训练
+
+    双回路反馈:
+      - Agent 4 (选股纠正): 每 monitor_interval 天评估选股质量,
+        发现漏选/模型退化 → 带调参指令触发 Agent 2 重训
+      - Agent 7 (卖出纠正): 每日评估买卖质量,
+        调整 Agent 5/6 参数 (止损线/卖出阈值等)
+
+    Args:
+        retrain_interval: 每隔多少交易日触发 Agent 2 周期重训 (0=不重训, 只用已有模型)
+        enable_exit_train: 是否在交易样本充足时训练 Agent 6 退出模型
+        monitor_interval: Agent 4 监控间隔 (交易日, 0=禁用, 默认 20)
+
+    Returns:
+        {"trades": DataFrame, "daily_pnl": DataFrame, "stats": dict}
+    """
+    cfg = cfg or PipelineConfig()
+    calendar = _build_calendar(cfg.cache_dir)
+
+    valid_dates = [d for d in calendar if start_date <= d <= end_date]
+    if not valid_dates:
+        logger.error(f"日期范围 {start_date}~{end_date} 内无交易日")
+        return {}
+
+    logger.info(f"=== 完整整合回测: {start_date} ~ {end_date}, {len(valid_dates)} 个交易日 ===")
+    logger.info(f"  模型轮换: ON (自动选择 scan_date 前可用的最新模型)")
+    logger.info(f"  Agent 2 重训间隔: {retrain_interval}天 ({'ON' if retrain_interval > 0 else 'OFF'})")
+    logger.info(f"  Agent 4 选股监控间隔: {monitor_interval}天 ({'ON' if monitor_interval > 0 else 'OFF'})")
+    logger.info(f"  Agent 6 退出模型训练: {'ON' if enable_exit_train else 'OFF'}")
+
+    # ── 预加载因子缓存到内存 ──
+    logger.info("预加载因子缓存到内存...")
+    from .agent1_factor import preload_factor_cache
+    preloaded = preload_factor_cache(cfg.cache_dir)
+    logger.info("预加载完成")
+
+    # 创建独立的回测目录
+    bt_results_dir = os.path.join(
+        cfg.results_dir, f"live_backtest_{start_date}_{end_date}"
+    )
+    # 清理旧回测 (如果存在)
+    portfolio_dir = os.path.join(bt_results_dir, "portfolio")
+    if os.path.exists(portfolio_dir):
+        shutil.rmtree(portfolio_dir)
+
+    bt_cfg = PipelineConfig(
+        cache_dir=cfg.cache_dir,
+        data_dir=cfg.data_dir,
+        basic_path=cfg.basic_path,
+        results_dir=bt_results_dir,
+        train_cfg=cfg.train_cfg,
+        predict_cfg=cfg.predict_cfg,
+        portfolio_cfg=cfg.portfolio_cfg or PortfolioConfig(),
+        exit_cfg=cfg.exit_cfg or ExitSignalConfig(),
+        use_llm=cfg.use_llm,
+    )
+
+    # ── 跟踪模型轮换和重训 ──
+    last_model_date = ""
+    last_retrain_idx = -retrain_interval  # 确保第一次检查时可以触发
+    last_monitor_idx = -monitor_interval  # Agent 4 监控计时
+    monitor_retrains = 0  # Agent 4 触发的重训次数
+    exit_model_trained = False
+    latest_live_result = {}  # 保存最近一次 run_live 结果 (供 Agent 4 使用)
+
+    for i, date in enumerate(valid_dates):
+        if (i + 1) % 20 == 0 or i == 0:
+            logger.info(f"[{i+1}/{len(valid_dates)}] {date}")
+
+        try:
+            # ── 模型轮换: 选择当前日期可用的最新模型 ──
+            model_dir = get_model_for_date(cfg.cache_dir, date)
+            if model_dir is None:
+                logger.warning(f"  {date}: 无可用模型, 跳过")
+                continue
+            cur_model_date = os.path.basename(model_dir)
+
+            # 日志: 模型切换
+            if cur_model_date != last_model_date:
+                logger.info(f"  📊 模型轮换: {last_model_date or '无'} → {cur_model_date}")
+                last_model_date = cur_model_date
+
+            # ── Agent 2 周期重训 (按需) ──
+            if retrain_interval > 0 and (i - last_retrain_idx) >= retrain_interval:
+                logger.info(f"  🔄 触发 Agent 2 重训 (间隔 {i - last_retrain_idx}天)")
+                try:
+                    run_train(date, cfg, force=True, trigger="periodic_backtest")
+                    # 重训后刷新模型
+                    new_model = get_model_for_date(cfg.cache_dir, date)
+                    if new_model:
+                        model_dir = new_model
+                        last_model_date = os.path.basename(model_dir)
+                        logger.info(f"  📊 重训完成, 模型更新: {last_model_date}")
+                except Exception as e:
+                    logger.warning(f"  Agent 2 重训失败: {e}")
+                last_retrain_idx = i
+
+            # ── Agent 6 退出模型训练 (交易样本充足后, 每 30 天检查一次) ──
+            if enable_exit_train and not exit_model_trained and i % 30 == 0 and i > 0:
+                trades_path = os.path.join(portfolio_dir, "trades.csv")
+                if os.path.exists(trades_path):
+                    trades_df = pd.read_csv(trades_path, dtype={"trade_date": str})
+                    n_sells = (trades_df["direction"] == "sell").sum()
+                    if n_sells >= 8:  # 回测中降低门槛
+                        logger.info(f"  🧠 Agent 6 退出模型训练 ({n_sells} 条卖出记录)")
+                        try:
+                            result = train_exit_model(
+                                portfolio_dir, cfg.data_dir, calendar, bt_cfg.exit_cfg,
+                                min_samples=8,
+                            )
+                            if result.get("trained"):
+                                exit_model_trained = True
+                                bt_cfg.exit_cfg.use_model = True
+                                logger.info(f"  ✅ Agent 6 模型训练成功: AUC={result.get('auc', 0):.3f}")
+                        except Exception as e:
+                            logger.warning(f"  Agent 6 训练失败: {e}")
+
+            # ── 每日 live 循环 (用轮换后的模型) ──
+            latest_live_result = run_live(
+                date, bt_cfg,
+                preloaded=preloaded,
+                skip_train=True,  # Agent 2 重训在上面单独处理
+                override_model_dir=model_dir,
+            )
+
+            # ── Agent 4: 选股纠正监控 (周期性) ──
+            if monitor_interval > 0 and (i - last_monitor_idx) >= monitor_interval and i > 0:
+                last_monitor_idx = i
+                try:
+                    # 从最近一次 run_live 结果获取因子快照和预测
+                    snapshot = latest_live_result.get("factor_snapshot")
+                    predictions = latest_live_result.get("predictions")
+                    if snapshot is not None and not snapshot.empty:
+                        # Tracker 数据 (回路 B: 跟踪反馈)
+                        tracker = PredictionTracker(os.path.join(bt_results_dir, "tracking"))
+                        tracking_summary = tracker.get_tracking_summary()
+                        expired_evals = tracker.get_expired_for_review()
+
+                        logger.info(f"  🔍 Agent 4: 选股纠正监控 (第 {i} 天)")
+                        monitor_result = run_monitor(
+                            cache_dir=cfg.cache_dir,
+                            data_dir=cfg.data_dir,
+                            scan_date=date,
+                            factor_snapshot=snapshot,
+                            current_predictions=predictions if predictions is not None else pd.DataFrame(),
+                            basic_path=cfg.basic_path,
+                            tracking_summary=tracking_summary,
+                            expired_evals=expired_evals,
+                        )
+
+                        # 输出诊断建议
+                        for s in monitor_result.get("suggestions", [])[:3]:
+                            logger.info(f"    💡 {s}")
+
+                        # 检查是否需要反馈驱动重训
+                        tuning = monitor_result.get("tuning_directives", {})
+                        if tuning.get("retrain_required"):
+                            logger.info(f"    🔄 Agent 4 触发 Agent 2 重训: {tuning.get('reason', '')[:80]}")
+                            try:
+                                train_cfg = cfg.train_cfg or TrainConfig()
+                                new_train_cfg = _apply_tuning_directives(train_cfg, tuning)
+                                new_train_cfg = replace(
+                                    new_train_cfg,
+                                    trigger="agent4_feedback",
+                                    trigger_reason=tuning.get("reason", ""),
+                                    force_retrain=True,
+                                )
+                                retrain_results = run_training(
+                                    cache_dir=cfg.cache_dir,
+                                    scan_date=date,
+                                    cfg=new_train_cfg,
+                                )
+                                if retrain_results:
+                                    new_model = get_model_for_date(cfg.cache_dir, date)
+                                    if new_model:
+                                        model_dir = new_model
+                                        last_model_date = os.path.basename(model_dir)
+                                        monitor_retrains += 1
+                                        logger.info(f"    ✅ Agent 4 重训完成: {last_model_date} "
+                                                    f"(累计 {monitor_retrains} 次)")
+                            except Exception as e:
+                                logger.warning(f"    Agent 4 触发重训失败: {e}")
+
+                        # 保存健康报告
+                        monitor_out = os.path.join(bt_results_dir, "agent4_reports")
+                        os.makedirs(monitor_out, exist_ok=True)
+                        report_path = os.path.join(monitor_out, f"health_{date}.json")
+                        with open(report_path, "w", encoding="utf-8") as f:
+                            json.dump(monitor_result, f, ensure_ascii=False, indent=2, default=str)
+                except Exception as e:
+                    logger.warning(f"  Agent 4 监控失败: {e}")
+        except Exception as e:
+            logger.error(f"  {date} 失败: {e}")
+            continue
+
+    # ── 汇总结果 ──
+    portfolio = Portfolio(portfolio_dir)
+
+    stats = portfolio.get_trade_stats()
+    trades = portfolio.get_trades()
+
+    # 保存汇总
+    summary = {
+        "start_date": start_date,
+        "end_date": end_date,
+        "n_trading_days": len(valid_dates),
+        "retrain_interval": retrain_interval,
+        "monitor_interval": monitor_interval,
+        "enable_exit_train": enable_exit_train,
+        "exit_model_trained": exit_model_trained,
+        "monitor_retrains": monitor_retrains,
+        "stats": stats,
+    }
+    summary_path = os.path.join(bt_results_dir, "live_backtest_summary.json")
+    os.makedirs(bt_results_dir, exist_ok=True)
+    with open(summary_path, "w", encoding="utf-8") as f:
+        json.dump(summary, f, ensure_ascii=False, indent=2, default=str)
+
+    logger.info(f"\n{'='*60}")
+    logger.info(f"完整整合回测完成: {start_date} ~ {end_date}")
+    logger.info(f"  交易笔数: {stats.get('n_trades', 0)}")
+    logger.info(f"  胜率: {stats.get('win_rate', 0):.1%}")
+    logger.info(f"  平均盈亏: {stats.get('avg_pnl_pct', 0):+.1%}")
+    logger.info(f"  总盈亏: {stats.get('total_pnl', 0):+.0f}")
+    logger.info(f"  Agent 4 选股纠正: {monitor_retrains} 次反馈驱动重训 (每 {monitor_interval} 天监控)")
+    logger.info(f"  Agent 6 模型: {'已训练' if exit_model_trained else '未训练 (样本不足)'}")
+    logger.info(f"  结果目录: {bt_results_dir}")
+    logger.info(f"{'='*60}")
+
+    return {"trades": trades, "stats": stats, "results_dir": bt_results_dir}
 
 
 def run_rolling(

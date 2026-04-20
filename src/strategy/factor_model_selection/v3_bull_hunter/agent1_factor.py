@@ -105,6 +105,62 @@ def compute_derived_factors(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def preload_factor_cache(
+    cache_dir: str,
+    min_rows: int = 60,
+) -> dict:
+    """
+    一次性预加载全部因子缓存到内存 (daily + weekly)。
+    回测用: 避免每天重复读 ~10000 个 CSV 文件。
+
+    Returns:
+        {"daily": {symbol: DataFrame}, "weekly": {symbol: DataFrame}}
+    """
+    result = {}
+    for sub in ("daily", "weekly"):
+        sub_dir = os.path.join(cache_dir, sub)
+        csv_files = sorted(glob.glob(os.path.join(sub_dir, "*.csv")))
+        cache = {}
+        for fpath in csv_files:
+            symbol = os.path.basename(fpath).replace(".csv", "")
+            try:
+                df = pd.read_csv(fpath)
+            except Exception:
+                continue
+            if len(df) < min_rows:
+                continue
+            df = df.sort_values("trade_date").reset_index(drop=True)
+            df["trade_date"] = df["trade_date"].astype(str)
+            df = compute_derived_factors(df)
+            cache[symbol] = df
+        logger.info(f"预加载 {sub}: {len(cache)} 只股票")
+        result[sub] = cache
+    return result
+
+
+def _snapshot_from_preloaded(
+    cache: dict[str, pd.DataFrame],
+    scan_date: str,
+    min_rows: int = 60,
+) -> pd.DataFrame:
+    """从预加载的内存缓存中提取指定日期的快照。"""
+    rows = []
+    for symbol, df in cache.items():
+        filtered = df[df["trade_date"] <= scan_date]
+        if len(filtered) < min_rows:
+            continue
+        last = filtered.iloc[-1].to_dict()
+        last["symbol"] = symbol
+        last["_trade_date"] = str(filtered["trade_date"].iloc[-1])
+        last["_avg_amount_20"] = (
+            float(filtered.tail(20)["amount"].mean()) if "amount" in filtered.columns else 0.0
+        )
+        rows.append(last)
+    if not rows:
+        return pd.DataFrame()
+    return pd.DataFrame(rows).set_index("symbol")
+
+
 def run_factor_generation(
     cache_dir: str,
     data_dir: str,
@@ -112,6 +168,7 @@ def run_factor_generation(
     basic_path: str = "",
     min_rows: int = 60,
     min_amount: float = 5000.0,
+    preloaded: dict | None = None,
 ) -> pd.DataFrame:
     """
     增量因子生成 + 快照提取。
@@ -122,37 +179,43 @@ def run_factor_generation(
     Returns:
         DataFrame, index=symbol, 含因子列 + 元信息列
     """
-    daily_dir = os.path.join(cache_dir, "daily")
-
-    # ── 增量检查 ──
-    csv_files = sorted(glob.glob(os.path.join(daily_dir, "*.csv")))
-    if not csv_files:
-        logger.error("No daily cache files found")
-        return pd.DataFrame()
-
-    # 抽样检查 10 只股票的最新日期
-    sample = csv_files[:10]
-    outdated = 0
-    for fp in sample:
-        try:
-            df = pd.read_csv(fp, usecols=["trade_date"])
-            latest = str(df["trade_date"].max())
-            if latest < scan_date:
-                outdated += 1
-        except Exception:
-            continue
-
-    if outdated > len(sample) // 2:
-        logger.warning(f"Cache may be outdated: {outdated}/{len(sample)} "
-                       f"stocks have latest date < {scan_date}. "
-                       f"Consider running feature_cache update first.")
-
-    # ── 提取快照 ──
+    # ── 提取快照 (preloaded 模式 vs 磁盘模式) ──
     basic_info = _load_basic_info(basic_path)
-    daily_snap = _load_snapshot(daily_dir, scan_date, min_rows)
 
-    weekly_dir = os.path.join(cache_dir, "weekly")
-    weekly_snap = _load_snapshot(weekly_dir, scan_date, min_rows=30)
+    if preloaded:
+        daily_snap = _snapshot_from_preloaded(
+            preloaded.get("daily", {}), scan_date, min_rows)
+        weekly_snap = _snapshot_from_preloaded(
+            preloaded.get("weekly", {}), scan_date, min_rows=30)
+    else:
+        daily_dir = os.path.join(cache_dir, "daily")
+
+        # ── 增量检查 ──
+        csv_files = sorted(glob.glob(os.path.join(daily_dir, "*.csv")))
+        if not csv_files:
+            logger.error("No daily cache files found")
+            return pd.DataFrame()
+
+        sample = csv_files[:10]
+        outdated = 0
+        for fp in sample:
+            try:
+                df = pd.read_csv(fp, usecols=["trade_date"])
+                latest = str(df["trade_date"].max())
+                if latest < scan_date:
+                    outdated += 1
+            except Exception:
+                continue
+
+        if outdated > len(sample) // 2:
+            logger.warning(f"Cache may be outdated: {outdated}/{len(sample)} "
+                           f"stocks have latest date < {scan_date}. "
+                           f"Consider running feature_cache update first.")
+
+        daily_snap = _load_snapshot(daily_dir, scan_date, min_rows)
+
+        weekly_dir = os.path.join(cache_dir, "weekly")
+        weekly_snap = _load_snapshot(weekly_dir, scan_date, min_rows=30)
 
     if daily_snap.empty:
         logger.error("No daily features loaded")

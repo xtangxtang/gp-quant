@@ -1,17 +1,21 @@
 """
-Bull Hunter v3 — Agent 3: 大牛股预测
+Bull Hunter v3 — Agent 3: 每日 A 类大牛股预测
 
-职责: 用 Agent 2 训练的模型, 对 scan_date 的因子截面预测,
-      输出三个维度的概率排名 + 分层推荐。
+v4 重构: 聚焦 A 类大牛股 (200% 目标), 每日输出 Top 5 候选。
 
-分层:
-  A 级: prob_200 > 阈值 (极少, 高置信度超级牛股)
-  B 级: prob_100 > 阈值 (少, 翻倍候选)
-  C 级: prob_30  > 阈值 (多, 短期爆发候选)
+输入:
+  - 最新模型 (feature-cache/bull_models/latest/)
+  - 当日因子快照 (Agent 1)
 
 输出:
-  results/{scan_date}/predictions.csv
-  (symbol, name, industry, prob_30, prob_100, prob_200, grade)
+  results/bull_hunter/daily/{scan_date}.csv
+  (symbol, name, industry, prob_200, prob_100, rank)
+
+规则:
+  - 只输出 A 级: prob_200 > 阈值
+  - 最多 5 只, 不足 5 只按实际数量输出
+  - 0 只也可以 (无候选日)
+  - 3 天内已推荐过的不重复输出 (去重)
 """
 
 from __future__ import annotations
@@ -29,15 +33,20 @@ logger = logging.getLogger(__name__)
 
 from .agent2_train import DAILY_FACTORS, TARGETS
 
+# 每日最多输出候选数
+TOP_N = 5
+# 去重窗口 (交易日)
+DEDUP_WINDOW_DAYS = 3
+
 
 @dataclass
 class PredictConfig:
     """预测阈值配置。"""
-    threshold_30pct: float = 0.15    # 正样本稀少, 用训练时的 best_threshold
-    threshold_100pct: float = 0.15   # 同上
-    threshold_200pct: float = 0.15   # 同上
-    use_model_threshold: bool = True # 优先用 meta 中的 best_threshold
-    top_n_per_grade: int = 20        # 每个等级最多输出 N 只
+    threshold_200pct: float = 0.15
+    threshold_100pct: float = 0.15
+    use_model_threshold: bool = True  # 优先用 meta 中的 best_threshold
+    top_n: int = TOP_N
+    dedup_days: int = DEDUP_WINDOW_DAYS
 
 
 def run_prediction(
@@ -45,18 +54,20 @@ def run_prediction(
     model_dir: str,
     scan_date: str,
     cfg: PredictConfig | None = None,
+    recent_predictions: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """
-    用训练好的模型预测全市场大牛股概率。
+    每日 A 类大牛股预测: 输出 Top 5 候选。
 
     Args:
         factor_snapshot: Agent 1 的因子截面 (index=symbol)
-        model_dir: bull_models/{scan_date}/ 目录
+        model_dir: bull_models/latest/ 或 bull_models/{date}/ 目录
         scan_date: 预测日期
         cfg: 预测阈值配置
+        recent_predictions: 近期预测记录 (用于去重), 含 symbol+scan_date 列
 
     Returns:
-        DataFrame: 含 symbol, prob_30, prob_100, prob_200, grade 等列
+        DataFrame: 含 symbol, prob_200, prob_100, rank 等列 (最多 TOP_N 行)
     """
     cfg = cfg or PredictConfig()
 
@@ -70,11 +81,11 @@ def run_prediction(
         with open(model_path, "rb") as f:
             models[tname] = pickle.load(f)
 
-    if not models:
-        logger.error("Agent 3: 无可用模型")
+    if "200pct" not in models:
+        logger.error("Agent 3: 无 200pct 主模型, 无法预测")
         return pd.DataFrame()
 
-    # 加载 meta 获取特征列
+    # 加载 meta 获取特征列和阈值
     meta_path = os.path.join(model_dir, "meta.json")
     meta = {}
     if os.path.exists(meta_path):
@@ -85,20 +96,18 @@ def run_prediction(
     symbols = factor_snapshot.index.tolist()
     results = {"symbol": symbols}
 
-    # 从 snapshot 中获取元信息
+    # 元信息
     for col in ["_name", "_industry"]:
         if col in factor_snapshot.columns:
             results[col[1:]] = factor_snapshot[col].tolist()
 
     # ── 逐模型预测 ──
     for tname, model in models.items():
-        # 确定特征列 (优先用 meta 中记录的)
         if tname in meta and "feature_cols" in meta[tname]:
             feature_cols = meta[tname]["feature_cols"]
         else:
             feature_cols = [f for f in DAILY_FACTORS if f in factor_snapshot.columns]
 
-        # 提取特征
         X_rows = []
         for sym in symbols:
             row_vals = []
@@ -108,72 +117,47 @@ def run_prediction(
             X_rows.append(row_vals)
 
         X = np.array(X_rows)
-
-        # 预测概率
         probas = model.predict_proba(X)[:, 1]
         prob_col = f"prob_{tname.replace('pct', '')}"
         results[prob_col] = probas.tolist()
 
     df = pd.DataFrame(results)
 
-    # ── 分层评级 (优先用模型训练时的最优阈值) ──
-    thresholds = {
-        "200pct": cfg.threshold_200pct,
-        "100pct": cfg.threshold_100pct,
-        "30pct": cfg.threshold_30pct,
-    }
-    if cfg.use_model_threshold:
-        for tname in ["200pct", "100pct", "30pct"]:
-            if tname in meta and "best_threshold" in meta[tname]:
-                thresholds[tname] = meta[tname]["best_threshold"]
-                logger.info(f"  {tname}: 使用模型最优阈值 {thresholds[tname]:.3f}")
+    # ── 阈值 (优先用模型训练时的最优阈值) ──
+    thresh_200 = cfg.threshold_200pct
+    if cfg.use_model_threshold and "200pct" in meta:
+        if "best_threshold" in meta["200pct"]:
+            thresh_200 = meta["200pct"]["best_threshold"]
+            logger.info(f"  200pct: 使用模型最优阈值 {thresh_200:.3f}")
 
-    df["grade"] = "D"
+    # ── 筛选 A 级: prob_200 > 阈值, 按 prob_200 降序 ──
+    if "prob_200" not in df.columns:
+        logger.error("Agent 3: prob_200 列缺失")
+        return pd.DataFrame()
 
-    if "prob_200" in df.columns:
-        df.loc[df["prob_200"] > thresholds["200pct"], "grade"] = "A"
-    if "prob_100" in df.columns:
-        mask_b = (df["prob_100"] > thresholds["100pct"]) & (df["grade"] == "D")
-        df.loc[mask_b, "grade"] = "B"
-    if "prob_30" in df.columns:
-        mask_c = (df["prob_30"] > thresholds["30pct"]) & (df["grade"] == "D")
-        df.loc[mask_c, "grade"] = "C"
+    selected = df[df["prob_200"] > thresh_200].copy()
+    selected = selected.sort_values("prob_200", ascending=False)
 
-    # ── 过滤 + 排序 ──
-    selected = df[df["grade"] != "D"].copy()
+    # ── 去重: 排除近 dedup_days 天内已推荐的 ──
+    if recent_predictions is not None and not recent_predictions.empty and cfg.dedup_days > 0:
+        recent_syms = set(recent_predictions["symbol"].unique())
+        before = len(selected)
+        selected = selected[~selected["symbol"].isin(recent_syms)]
+        deduped = before - len(selected)
+        if deduped > 0:
+            logger.info(f"  去重: 排除 {deduped} 只近 {cfg.dedup_days} 天已推荐")
 
-    if selected.empty:
-        logger.warning("Agent 3: 无候选股票 (全部低于阈值)")
-        # 回退: 取 prob_30 最高的 top_n
-        if "prob_30" in df.columns:
-            selected = df.nlargest(cfg.top_n_per_grade, "prob_30").copy()
-            selected["grade"] = "C"
+    # ── 取 Top N ──
+    final = selected.head(cfg.top_n).copy()
+    final["rank"] = range(1, len(final) + 1)
+    final["grade"] = "A"
+    final["scan_date"] = scan_date
 
-    # 按等级排序 (A > B > C), 同等级按对应概率排序
-    grade_order = {"A": 0, "B": 1, "C": 2, "D": 3}
-    selected["_grade_order"] = selected["grade"].map(grade_order)
-
-    sort_col = "prob_30"
-    for c in ["prob_200", "prob_100", "prob_30"]:
-        if c in selected.columns:
-            sort_col = c
-            break
-
-    selected = selected.sort_values(
-        ["_grade_order", sort_col], ascending=[True, False]
-    ).drop(columns=["_grade_order"])
-
-    # 限制每个等级的数量
-    final_parts = []
-    for g in ["A", "B", "C"]:
-        part = selected[selected["grade"] == g].head(cfg.top_n_per_grade)
-        final_parts.append(part)
-    final = pd.concat(final_parts, ignore_index=True)
-
-    n_a = (final["grade"] == "A").sum()
-    n_b = (final["grade"] == "B").sum()
-    n_c = (final["grade"] == "C").sum()
-    logger.info(f"Agent 3 完成: {len(final)} 只候选, "
-                f"A={n_a} B={n_b} C={n_c}, scan_date={scan_date}")
+    n_total = len(df)
+    n_above = len(selected)
+    n_out = len(final)
+    logger.info(f"Agent 3 完成: {n_out} 只 A 级候选 "
+                f"(全市场 {n_total} 只, 过阈值 {n_above} 只, "
+                f"Top {cfg.top_n}, scan_date={scan_date})")
 
     return final

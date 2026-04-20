@@ -36,7 +36,73 @@ DAILY_FACTORS = [
     "mf_sm_proportion", "mf_flow_imbalance",
     "mf_big_momentum", "mf_big_streak",
     "coherence_l1", "purity_norm", "von_neumann_entropy", "coherence_decay_rate",
+    # ── v2: factor_advisor 建议新增的 8 个衍生因子 ──
+    "momentum_20d", "momentum_60d", "price_vs_ma20",
+    "vol_price_synergy", "volatility_ratio", "mf_reversal_zscore",
+    "atr_20d", "close_vs_high_60d",
 ]
+
+
+def compute_derived_factors(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    从原始 OHLCV + 资金流列计算 8 个新衍生因子。
+
+    需要列: close (必须), high/low/amount/net_mf_amount (可选)。
+    在时间序列上计算 rolling 指标, 适用于 agent1 快照提取和 agent2 训练 panel 构建。
+    """
+    out = df.copy()
+    close = out["close"].astype(np.float64)
+
+    # 1. 20日动量
+    out["momentum_20d"] = close.pct_change(20)
+
+    # 2. 60日动量
+    out["momentum_60d"] = close.pct_change(60)
+
+    # 3. 价格相对20日均线偏离度
+    ma20 = close.rolling(20).mean()
+    out["price_vs_ma20"] = close / ma20.replace(0, np.nan) - 1
+
+    # 4. 量价协同度
+    if "amount" in out.columns:
+        amt = out["amount"].astype(np.float64)
+        amt_ratio = amt.rolling(5).mean() / amt.rolling(20).mean().replace(0, np.nan)
+        ret_5 = close.pct_change(5).clip(lower=0)
+        out["vol_price_synergy"] = amt_ratio * ret_5
+    else:
+        out["vol_price_synergy"] = np.nan
+
+    # 5. 短长期波动率之比
+    ret = close.pct_change()
+    vol_10 = ret.rolling(10).std()
+    vol_60 = ret.rolling(60).std()
+    out["volatility_ratio"] = vol_10 / (vol_60 + 1e-8)
+
+    # 6. 资金流反转Z值
+    if "net_mf_amount" in out.columns:
+        nmf = out["net_mf_amount"].astype(np.float64)
+        mf_ma5 = nmf.rolling(5).mean()
+        mf_ma20 = nmf.rolling(20).mean()
+        mf_std20 = nmf.rolling(20).std()
+        out["mf_reversal_zscore"] = (mf_ma5 - mf_ma20) / (mf_std20 + 1e-8)
+    else:
+        out["mf_reversal_zscore"] = np.nan
+
+    # 7. 20日ATR比率 (振幅/股价)
+    if "high" in out.columns and "low" in out.columns:
+        atr = (out["high"].astype(np.float64) - out["low"].astype(np.float64)).rolling(20).mean()
+        out["atr_20d"] = atr / close.replace(0, np.nan)
+    else:
+        out["atr_20d"] = np.nan
+
+    # 8. 当前价格相对60日最高价
+    if "high" in out.columns:
+        high_60 = out["high"].astype(np.float64).rolling(60).max()
+        out["close_vs_high_60d"] = close / high_60.replace(0, np.nan)
+    else:
+        out["close_vs_high_60d"] = np.nan
+
+    return out
 
 
 def run_factor_generation(
@@ -151,6 +217,9 @@ def _load_snapshot(
             df = df[df["trade_date"] <= scan_date]
             if len(df) < min_rows:
                 continue
+
+        # 计算衍生因子 (rolling)
+        df = compute_derived_factors(df)
 
         last = df.iloc[-1].to_dict()
         last["symbol"] = symbol

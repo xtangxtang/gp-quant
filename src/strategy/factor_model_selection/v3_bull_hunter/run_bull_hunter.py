@@ -1,20 +1,26 @@
 """
 Bull Hunter v3 — CLI 入口
 
-用法:
-  # 单日扫描
+v4 模式:
+  # 每日预测 (轻量, 复用 latest 模型)
   python -m src.strategy.factor_model_selection.v3_bull_hunter.run_bull_hunter \
-      --scan_date 20260416
+      --daily --scan_date 20260420
 
-  # 滚动回测
+  # 周训 (训练新模型, 更新 latest)
   python -m src.strategy.factor_model_selection.v3_bull_hunter.run_bull_hunter \
-      --rolling --start_date 20250101 --end_date 20250630
+      --train --scan_date 20260420
 
-  # 自定义路径
+  # 复盘 (Agent 4 双回路评估 + 可能触发重训)
   python -m src.strategy.factor_model_selection.v3_bull_hunter.run_bull_hunter \
-      --scan_date 20260416 \
-      --cache_dir /path/to/feature-cache \
-      --data_dir /path/to/tushare-daily-full
+      --review --scan_date 20260420
+
+  # 回测
+  python -m src.strategy.factor_model_selection.v3_bull_hunter.run_bull_hunter \
+      --backtest --start_date 20250101 --end_date 20251230
+
+  # 完整扫描 (train + predict, 兼容旧接口)
+  python -m src.strategy.factor_model_selection.v3_bull_hunter.run_bull_hunter \
+      --scan_date 20260420
 """
 
 from __future__ import annotations
@@ -24,57 +30,60 @@ import logging
 import os
 import sys
 
-from .pipeline import PipelineConfig, run_backtest, run_rolling, run_scan
+from .pipeline import (
+    PipelineConfig, run_backtest, run_daily, run_review, run_scan, run_train,
+)
 from .agent2_train import TrainConfig
 from .agent3_predict import PredictConfig
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Bull Hunter v3 — 大牛股预测系统")
+    parser = argparse.ArgumentParser(description="Bull Hunter v3 — 大牛股预测系统 (v4)")
 
     # 模式
-    parser.add_argument("--scan_date", type=str, default="",
-                        help="单日扫描日期 (YYYYMMDD)")
-    parser.add_argument("--rolling", action="store_true",
-                        help="滚动回测模式")
+    parser.add_argument("--daily", action="store_true",
+                        help="每日预测模式: 复用 latest 模型, 输出 Top 5 A 级候选")
+    parser.add_argument("--train", action="store_true",
+                        help="训练模式: Agent 1 + Agent 2, 更新 latest 模型")
+    parser.add_argument("--review", action="store_true",
+                        help="复盘模式: Agent 4 双回路评估 + 可能触发重训")
     parser.add_argument("--backtest", action="store_true",
-                        help="回测模式 (滚动扫描 + 实际收益验证)")
+                        help="回测模式: 滚动扫描 + 实际收益验证")
+    parser.add_argument("--scan_date", type=str, default="",
+                        help="扫描/训练/复盘日期 (YYYYMMDD)")
     parser.add_argument("--start_date", type=str, default="",
-                        help="滚动/回测起始日期")
+                        help="回测起始日期")
     parser.add_argument("--end_date", type=str, default="",
-                        help="滚动/回测结束日期")
+                        help="回测结束日期")
+    parser.add_argument("--force", action="store_true",
+                        help="强制训练 (忽略间隔和缓存)")
 
     # 路径
     parser.add_argument("--cache_dir", type=str,
-                        default="/nvme5/xtang/gp-workspace/gp-data/feature-cache",
-                        help="特征缓存目录")
+                        default="/nvme5/xtang/gp-workspace/gp-data/feature-cache")
     parser.add_argument("--data_dir", type=str,
-                        default="/nvme5/xtang/gp-workspace/gp-data/tushare-daily-full",
-                        help="日线数据目录")
+                        default="/nvme5/xtang/gp-workspace/gp-data/tushare-daily-full")
     parser.add_argument("--basic_path", type=str,
-                        default="/nvme5/xtang/gp-workspace/gp-data/tushare_stock_basic.csv",
-                        help="股票基本信息 CSV")
+                        default="/nvme5/xtang/gp-workspace/gp-data/tushare_stock_basic.csv")
     parser.add_argument("--results_dir", type=str,
-                        default="results/bull_hunter",
-                        help="结果输出目录")
+                        default="results/bull_hunter")
 
     # 训练参数
-    parser.add_argument("--lookback_months", type=int, default=12,
-                        help="训练回看月数")
-    parser.add_argument("--n_estimators", type=int, default=800,
-                        help="LightGBM 树数")
-    parser.add_argument("--learning_rate", type=float, default=0.03,
-                        help="LightGBM 学习率")
+    parser.add_argument("--lookback_months", type=int, default=12)
+    parser.add_argument("--n_estimators", type=int, default=800)
+    parser.add_argument("--learning_rate", type=float, default=0.03)
 
-    # 预测阈值
-    parser.add_argument("--threshold_30", type=float, default=0.15)
-    parser.add_argument("--threshold_100", type=float, default=0.15)
+    # 预测参数
     parser.add_argument("--threshold_200", type=float, default=0.15)
-    parser.add_argument("--top_n", type=int, default=20)
+    parser.add_argument("--top_n", type=int, default=5,
+                        help="每日最多输出候选数 (默认 5)")
 
-    # 滚动间隔
-    parser.add_argument("--interval_days", type=int, default=20,
-                        help="滚动回测间隔天数")
+    # 回测参数
+    parser.add_argument("--interval_days", type=int, default=20)
+
+    # LLM
+    parser.add_argument("--use-llm", action="store_true",
+                        help="启用 LLM 因子顾问")
 
     args = parser.parse_args()
 
@@ -91,10 +100,8 @@ def main():
         learning_rate=args.learning_rate,
     )
     predict_cfg = PredictConfig(
-        threshold_30pct=args.threshold_30,
-        threshold_100pct=args.threshold_100,
         threshold_200pct=args.threshold_200,
-        top_n_per_grade=args.top_n,
+        top_n=args.top_n,
     )
     pipe_cfg = PipelineConfig(
         cache_dir=args.cache_dir,
@@ -103,11 +110,32 @@ def main():
         results_dir=args.results_dir,
         train_cfg=train_cfg,
         predict_cfg=predict_cfg,
+        use_llm=args.use_llm,
     )
 
-    if args.backtest:
+    if args.daily:
+        if not args.scan_date:
+            print("ERROR: --daily 需要 --scan_date")
+            sys.exit(1)
+        result = run_daily(args.scan_date, pipe_cfg)
+        _print_daily_result(result, args)
+
+    elif args.train:
+        if not args.scan_date:
+            print("ERROR: --train 需要 --scan_date")
+            sys.exit(1)
+        run_train(args.scan_date, pipe_cfg, force=args.force, trigger="manual")
+
+    elif args.review:
+        if not args.scan_date:
+            print("ERROR: --review 需要 --scan_date")
+            sys.exit(1)
+        health = run_review(args.scan_date, pipe_cfg)
+        _print_review_result(health, args)
+
+    elif args.backtest:
         if not args.start_date or not args.end_date:
-            print("ERROR: --backtest 模式需要 --start_date 和 --end_date")
+            print("ERROR: --backtest 需要 --start_date 和 --end_date")
             sys.exit(1)
         result = run_backtest(
             args.start_date, args.end_date, pipe_cfg,
@@ -115,90 +143,93 @@ def main():
         )
         if not result.empty:
             _print_backtest_summary(result, args)
-    elif args.rolling:
-        if not args.start_date or not args.end_date:
-            print("ERROR: --rolling 模式需要 --start_date 和 --end_date")
-            sys.exit(1)
-        run_rolling(args.start_date, args.end_date, pipe_cfg, args.interval_days)
+
     elif args.scan_date:
+        # 兼容旧模式: 完整扫描
         result = run_scan(args.scan_date, pipe_cfg)
-        if not result.empty:
-            # 读取健康报告
-            import json as _json
-            health_path = os.path.join(args.results_dir, args.scan_date, "health_report.json")
-            health = {}
-            if os.path.exists(health_path):
-                with open(health_path) as _f:
-                    health = _json.load(_f)
+        _print_scan_result(result, args)
 
-            # 读取模型 meta
-            meta_path = os.path.join(args.cache_dir, "bull_models", args.scan_date, "meta.json")
-            meta = {}
-            if os.path.exists(meta_path):
-                with open(meta_path) as _f:
-                    meta = _json.load(_f)
-
-            grade_label = {"A": "大牛股(200%)", "B": "翻倍股(100%)", "C": "短线强势(30%)"}
-            prob_label = {"prob_30": "2周涨30%", "prob_100": "2月翻倍", "prob_200": "6月涨200%"}
-
-            n_a = (result["grade"] == "A").sum()
-            n_b = (result["grade"] == "B").sum()
-            n_c = (result["grade"] == "C").sum()
-
-            print(f"\n{'='*60}")
-            print(f"  Bull Hunter v3 — 大牛股预测报告")
-            print(f"  扫描日期: {args.scan_date}")
-            print(f"{'='*60}")
-
-            # 模型质量摘要
-            if meta:
-                print(f"\n📊 模型质量:")
-                for tname in ["30pct", "100pct", "200pct"]:
-                    m = meta.get(tname, {})
-                    auc = m.get("val_auc", 0)
-                    prec = m.get("val_precision", 0)
-                    rec = m.get("val_recall", 0)
-                    th = m.get("best_threshold", 0)
-                    n_tr = m.get("n_train", 0)
-                    pos_r = m.get("pos_rate_train", 0)
-                    top3 = [f["name"] for f in m.get("top_features", [])[:3]]
-                    print(f"  {tname:8s}: AUC={auc:.3f}  精确率={prec:.1%}  "
-                          f"召回率={rec:.1%}  最优阈值={th:.2f}  "
-                          f"训练={n_tr}条(正样本{pos_r:.1%})")
-                    if top3:
-                        print(f"            关键因子: {', '.join(top3)}")
-
-            # 健康状态
-            status = health.get("status", "unknown")
-            status_cn = {"healthy": "✅ 健康", "warning": "⚠️ 警告", "critical": "🔴 严重"}.get(status, status)
-            print(f"\n🏥 系统状态: {status_cn}")
-            suggestions = health.get("suggestions", [])
-            if suggestions:
-                for s in suggestions:
-                    print(f"  💡 {s}")
-
-            # 候选列表
-            print(f"\n🎯 候选列表: 共 {len(result)} 只 (A级={n_a}, B级={n_b}, C级={n_c})")
-            print(f"{'-'*60}")
-
-            for grade in ["A", "B", "C"]:
-                subset = result[result["grade"] == grade]
-                if subset.empty:
-                    continue
-                print(f"\n  【{grade}级 — {grade_label.get(grade, '')}】")
-                for _, row in subset.iterrows():
-                    sym = row["symbol"]
-                    name = row.get("name", "")
-                    parts = []
-                    for c, label in prob_label.items():
-                        if c in row:
-                            parts.append(f"{label}={row[c]:.1%}")
-                    print(f"    {sym} {name:<8s} | {' | '.join(parts)}")
-
-            print(f"\n{'='*60}")
     else:
-        print("ERROR: 需要 --scan_date, --rolling 或 --backtest")
+        print("ERROR: 需要 --daily, --train, --review, --backtest 或 --scan_date")
         sys.exit(1)
+
+
+def _print_daily_result(result, args):
+    """打印每日预测结果。"""
+    print(f"\n{'='*60}")
+    print(f"  Bull Hunter v3 — 每日 A 级候选")
+    print(f"  日期: {args.scan_date}")
+    print(f"{'='*60}")
+
+    if result.empty:
+        print("  今日无 A 级候选")
+    else:
+        for _, row in result.iterrows():
+            sym = row["symbol"]
+            name = row.get("name", "")
+            rank = row.get("rank", "?")
+            p200 = row.get("prob_200", 0)
+            p100 = row.get("prob_100", 0)
+            print(f"  #{rank} {sym} {name:<8s} | "
+                  f"6月涨200%={p200:.1%} | 2月翻倍={p100:.1%}")
+
+    print(f"{'='*60}")
+
+
+def _print_review_result(health, args):
+    """打印复盘结果。"""
+    print(f"\n{'='*60}")
+    print(f"  Bull Hunter v3 — 复盘报告")
+    print(f"  日期: {args.scan_date}")
+    print(f"{'='*60}")
+
+    status = health.get("status", "unknown")
+    status_cn = {"healthy": "✅ 健康", "warning": "⚠️ 警告", "critical": "🔴 严重"}.get(status, status)
+    print(f"\n  系统状态: {status_cn}")
+
+    suggestions = health.get("suggestions", [])
+    if suggestions:
+        print(f"\n  建议 ({len(suggestions)} 条):")
+        for s in suggestions:
+            print(f"    💡 {s}")
+
+    tuning = health.get("tuning_directives", {})
+    if tuning.get("retrain_required"):
+        print(f"\n  🔄 已触发重训: {tuning.get('reason', '')}")
+    else:
+        print(f"\n  无需重训")
+
+    tracking = health.get("tracking_feedback", {})
+    if tracking:
+        n_eval = tracking.get("n_evaluated", 0)
+        win = tracking.get("win_rate", 0)
+        loss = tracking.get("loss_rate", 0)
+        if n_eval > 0:
+            print(f"\n  跟踪评估: {n_eval} 条到期, 胜率={win:.0%}, 亏损率={loss:.0%}")
+
+    print(f"{'='*60}")
+
+
+def _print_scan_result(result, args):
+    """打印完整扫描结果。"""
+    if result.empty:
+        print("无候选")
+        return
+
+    print(f"\n{'='*60}")
+    print(f"  Bull Hunter v3 — 扫描结果")
+    print(f"  日期: {args.scan_date}")
+    print(f"  候选: {len(result)} 只 A 级")
+    print(f"{'='*60}")
+
+    for _, row in result.iterrows():
+        sym = row["symbol"]
+        name = row.get("name", "")
+        p200 = row.get("prob_200", 0)
+        p100 = row.get("prob_100", 0)
+        print(f"  {sym} {name:<8s} | 200%={p200:.1%} | 100%={p100:.1%}")
+
+    print(f"{'='*60}")
 
 
 def _print_backtest_summary(result, args):
@@ -215,15 +246,16 @@ def _print_backtest_summary(result, args):
     print(f"  扫描次数: {n_dates} 次, 总预测: {n_total} 条")
     print(f"{'='*70}")
 
-    # 按等级统计
-    for grade, label in [("A", "大牛股(200%)"), ("B", "翻倍股(100%)"),
-                         ("C", "短线强势(30%)"), ("ALL", "全部")]:
-        subset = result if grade == "ALL" else result[result["grade"] == grade]
+    # 总体统计 (只有 A 级)
+    for grade, label in [("A", "A级(200%目标)"), ("ALL", "全部")]:
+        subset = result if grade == "ALL" else (
+            result[result["grade"] == grade] if "grade" in result.columns else result
+        )
         if subset.empty:
             continue
 
         n = len(subset)
-        print(f"\n  【{grade}级 — {label}】 {n} 条预测")
+        print(f"\n  【{label}】 {n} 条预测")
         print(f"  {'-'*66}")
 
         for fwd_days, target, fwd_label in [

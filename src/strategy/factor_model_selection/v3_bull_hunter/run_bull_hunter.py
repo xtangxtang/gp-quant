@@ -121,6 +121,13 @@ def main():
     parser.add_argument("--min_buy_quality", type=float, default=0.3,
                         help="Agent 8 最低买入质量阈值 (默认 0.3)")
 
+    # V9: 市场过滤 + 弱模型门槛
+    parser.add_argument("--market_trend_csv", type=str,
+                        default="results/market_trend/market_trend_daily.csv",
+                        help="市场趋势 CSV 路径 (含 date,trend 列), 传 'none' 禁用")
+    parser.add_argument("--min_model_auc", type=float, default=0.55,
+                        help="弱模型门槛: 200pct AUC 低于此值不允许买入 (默认 0.55)")
+
     args = parser.parse_args()
 
     # 日志
@@ -146,6 +153,19 @@ def main():
     )
     exit_cfg = ExitSignalConfig()
     buy_signal_cfg = BuySignalConfig(min_buy_quality=args.min_buy_quality)
+
+    # V9: 加载市场趋势查表
+    market_state_lookup = None
+    if args.market_trend_csv and args.market_trend_csv.lower() != "none":
+        import os as _os
+        if _os.path.exists(args.market_trend_csv):
+            import pandas as _pd
+            _mt = _pd.read_csv(args.market_trend_csv, dtype={"date": str})
+            market_state_lookup = dict(zip(_mt["date"], _mt["trend"]))
+            print(f"  加载市场趋势: {len(market_state_lookup)} 天 ({_mt['date'].min()}~{_mt['date'].max()})")
+        else:
+            print(f"  WARN: 市场趋势文件不存在: {args.market_trend_csv}")
+
     pipe_cfg = PipelineConfig(
         cache_dir=args.cache_dir,
         data_dir=args.data_dir,
@@ -156,6 +176,8 @@ def main():
         portfolio_cfg=portfolio_cfg,
         exit_cfg=exit_cfg,
         buy_signal_cfg=buy_signal_cfg,
+        market_state_lookup=market_state_lookup,
+        min_model_auc=args.min_model_auc,
     )
 
     if args.daily:

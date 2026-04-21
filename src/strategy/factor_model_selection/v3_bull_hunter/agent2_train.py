@@ -303,7 +303,14 @@ def get_latest_model_dir(cache_dir: str) -> str | None:
 
 
 def _is_model_loadable(model_dir: str) -> bool:
-    """检查模型是否可加载 (model_type 兼容当前环境)。"""
+    """检查模型是否可加载 (有 pkl 文件且 model_type 兼容当前环境)。"""
+    # 至少需要一个 model pkl 文件
+    has_pkl = any(
+        f.endswith(".pkl") for f in os.listdir(model_dir)
+        if os.path.isfile(os.path.join(model_dir, f))
+    )
+    if not has_pkl:
+        return False
     meta_path = os.path.join(model_dir, "meta.json")
     if not os.path.exists(meta_path):
         return True  # 无 meta 默认可用

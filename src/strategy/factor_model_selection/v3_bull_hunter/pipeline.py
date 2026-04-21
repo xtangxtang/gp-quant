@@ -51,6 +51,16 @@ class PipelineConfig:
     portfolio_cfg: PortfolioConfig | None = None
     exit_cfg: ExitSignalConfig | None = None
     buy_signal_cfg: BuySignalConfig | None = None
+    # ── 市场过滤 (建议1) ──
+    # date(YYYYMMDD) → trend ("STRONG_UP"/"UP"/"NEUTRAL"/"DOWN"/"STRONG_DOWN")
+    market_state_lookup: dict | None = None
+    # 在以下市场状态下暂停买入
+    market_no_buy_states: tuple = ("STRONG_DOWN",)
+    # 在以下市场状态下收紧止损
+    market_tighten_stop_states: tuple = ("DOWN", "STRONG_DOWN")
+    market_tightened_stop_pct: float = -0.08  # 收紧后的止损线
+    # ── 弱模型门槛 (建议2) ──
+    min_model_auc: float = 0.55   # 200pct 模型 AUC 低于此值, 跳过买入
 
 
 # ──────────────────────────────────────────────────────────
@@ -509,6 +519,37 @@ def run_live(
         return {}
     logger.info(f"  使用模型: {os.path.basename(model_dir)}")
 
+    # ── 弱模型闸门 (建议2): AUC 太低则不允许新买入 ──
+    weak_model = False
+    try:
+        meta_path = os.path.join(model_dir, "meta.json")
+        if os.path.exists(meta_path):
+            with open(meta_path) as f:
+                _meta = json.load(f)
+            _auc = _meta.get("200pct", {}).get("val_auc", 0.0)
+            if _auc < cfg.min_model_auc:
+                weak_model = True
+                logger.info(f"  ⚠️ 弱模型闸门: AUC={_auc:.3f} < {cfg.min_model_auc:.2f}, 暂停新买入")
+    except Exception as _e:
+        logger.warning(f"  读取 meta.json 失败: {_e}")
+
+    # ── 大盘过滤 (建议1): 查询当日市场状态 ──
+    market_state = None
+    if cfg.market_state_lookup is not None:
+        market_state = cfg.market_state_lookup.get(scan_date)
+        if market_state:
+            logger.info(f"  📊 大盘状态: {market_state}")
+
+    no_buy_today = weak_model
+    if market_state and market_state in cfg.market_no_buy_states:
+        no_buy_today = True
+        logger.info(f"  🛑 大盘过滤: {market_state} → 暂停新买入")
+
+    # 收紧止损 (DOWN/STRONG_DOWN 时)
+    if market_state and market_state in cfg.market_tighten_stop_states:
+        portfolio_cfg = replace(portfolio_cfg, stop_loss_pct=cfg.market_tightened_stop_pct)
+        logger.info(f"  🛡️ 大盘过滤: {market_state} → 收紧止损 {cfg.market_tightened_stop_pct:+.0%}")
+
     # ── Agent 1: 因子快照 ──
     logger.info("── Agent 1: 因子快照 ──")
     snapshot = run_factor_generation(
@@ -580,6 +621,10 @@ def run_live(
 
     # ── Agent 5: 买卖执行 ──
     logger.info("── Agent 5: 组合决策 ──")
+    # 弱模型 / 大盘过滤: 清空买入候选 (允许卖出/止损照常)
+    if no_buy_today and not predictions.empty:
+        logger.info(f"  🚫 清空 {len(predictions)} 只买入候选 (弱模型或大盘过滤)")
+        predictions = predictions.iloc[0:0]
     portfolio_result = run_portfolio_decisions(
         candidates=predictions,
         sell_weights=sell_weights,
@@ -796,6 +841,11 @@ def run_live_backtest(
         portfolio_cfg=cfg.portfolio_cfg or PortfolioConfig(),
         exit_cfg=cfg.exit_cfg or ExitSignalConfig(),
         buy_signal_cfg=cfg.buy_signal_cfg or BuySignalConfig(),
+        market_state_lookup=cfg.market_state_lookup,
+        market_no_buy_states=cfg.market_no_buy_states,
+        market_tighten_stop_states=cfg.market_tighten_stop_states,
+        market_tightened_stop_pct=cfg.market_tightened_stop_pct,
+        min_model_auc=cfg.min_model_auc,
     )
 
     # ── 跟踪模型轮换和重训 ──
@@ -805,7 +855,8 @@ def run_live_backtest(
     monitor_retrains = 0  # Agent 4 触发的重训次数
     exit_model_trained = False
     latest_live_result = {}  # 保存最近一次 run_live 结果 (供 Agent 4 使用)
-    cold_started = False  # P0: cold-start flag, 只触发一次初始训练
+    cold_started = False  # P0: cold-start flag, 训练成功后不再尝试
+    cold_start_last_attempt = -20  # 上次尝试的 index, 初始值确保首日可触发
 
     for i, date in enumerate(valid_dates):
         if (i + 1) % 20 == 0 or i == 0:
@@ -815,16 +866,17 @@ def run_live_backtest(
             # ── 模型轮换: 选择当前日期可用的最新模型 ──
             model_dir = get_model_for_date(cfg.cache_dir, date)
             if model_dir is None:
-                # ── P0: cold-start 训练 (回测开始时无模型则自动训练一个) ──
-                if not cold_started:
+                # ── P0: cold-start 训练 (无模型时周期性尝试训练) ──
+                if not cold_started and (i - cold_start_last_attempt) >= 20:
+                    cold_start_last_attempt = i
                     logger.info(f"  🚀 Cold-start: {date} 无可用模型, 自动触发初始训练")
                     try:
                         run_train(date, cfg, force=True, trigger="cold_start_backtest")
-                        cold_started = True
                         model_dir = get_model_for_date(cfg.cache_dir, date)
                         if model_dir is None:
                             logger.warning(f"  Cold-start 训练完成但仍无可用模型, 跳过 {date}")
                             continue
+                        cold_started = True  # 成功才标记, 失败则下次 20 天后重试
                     except Exception as e:
                         logger.warning(f"  Cold-start 训练失败: {e}, 跳过")
                         continue
@@ -921,6 +973,31 @@ def run_live_backtest(
             # ── 统一周期性复盘 (选股+交易质量评估) ──
             if monitor_interval > 0 and (i - last_monitor_idx) >= monitor_interval and i > 0:
                 last_monitor_idx = i
+
+                # ── 强制重训: 模型长期无预测 (空转保护) ──
+                trades_path = os.path.join(portfolio_dir, "trades.csv")
+                n_total_buys = 0
+                if os.path.exists(trades_path):
+                    _tdf = pd.read_csv(trades_path, dtype={"trade_date": str})
+                    n_total_buys = (_tdf["direction"] == "buy").sum()
+                days_with_model = i - cold_start_last_attempt  # 有模型后已过天数
+                if cold_started and n_total_buys == 0 and days_with_model >= 40:
+                    logger.info(f"  🔄 空转保护: 有模型 {days_with_model} 天仍无买入, 强制重训 (date={date})")
+                    try:
+                        run_train(date, cfg, force=True,
+                                  trigger="stale_model_retrain",
+                                  trigger_reason=f"有模型{days_with_model}天无买入")
+                        new_model = get_model_for_date(cfg.cache_dir, date)
+                        if new_model:
+                            model_dir = new_model
+                            last_model_date = os.path.basename(model_dir)
+                            monitor_retrains += 1
+                            cold_start_last_attempt = i  # 重置计时, 避免连续触发
+                            logger.info(f"    ✅ 空转重训完成: {last_model_date}")
+                    except Exception as e:
+                        logger.warning(f"    空转重训失败: {e}")
+                    continue  # 重训后跳过本次复盘
+
                 try:
                     snapshot = latest_live_result.get("factor_snapshot")
                     predictions = latest_live_result.get("predictions")

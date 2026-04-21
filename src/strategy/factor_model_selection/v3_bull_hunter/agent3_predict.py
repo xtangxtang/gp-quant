@@ -122,9 +122,15 @@ def run_prediction(
     # ── 阈值 (优先用模型训练时的最优阈值) ──
     thresh_200 = cfg.threshold_200pct
     if cfg.use_model_threshold and "200pct" in meta:
+        model_auc = meta["200pct"].get("val_auc", 0)
         if "best_threshold" in meta["200pct"]:
-            thresh_200 = meta["200pct"]["best_threshold"]
-            logger.info(f"  200pct: 使用模型最优阈值 {thresh_200:.3f}")
+            model_thresh = meta["200pct"]["best_threshold"]
+            # 弱模型 (AUC < 0.55) 且阈值过高时, 回退默认阈值避免空转
+            if model_auc < 0.55 and model_thresh > 0.40:
+                logger.info(f"  200pct: 模型较弱 (AUC={model_auc:.3f}), 阈值 {model_thresh:.3f} → 回退 {thresh_200:.3f}")
+            else:
+                thresh_200 = model_thresh
+                logger.info(f"  200pct: 使用模型最优阈值 {thresh_200:.3f}")
 
     # ── 筛选 A 级: prob_200 > 阈值, 按 prob_200 降序 ──
     if "prob_200" not in df.columns:

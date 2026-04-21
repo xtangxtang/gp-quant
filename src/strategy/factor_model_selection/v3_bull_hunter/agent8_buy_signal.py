@@ -97,7 +97,7 @@ class BuySignalConfig:
     rule_weights: dict = field(default_factory=lambda: dict(DEFAULT_BUY_WEIGHTS))
     use_model: bool = False       # 是否使用训练模型
     min_buy_quality: float = 0.3  # 低于此 quality 不推荐买入
-    min_prob_200: float = 0.20    # Agent 3 预测概率硬门槛
+    min_prob_200: float = 0.30    # Agent 3 预测概率硬门槛 (V9: 0.20 → 0.30)
     retrain_interval: int = 20    # 多少笔新交易后重训
 
 

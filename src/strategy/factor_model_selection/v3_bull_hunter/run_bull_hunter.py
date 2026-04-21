@@ -1,7 +1,9 @@
 """
-Bull Hunter v3 — CLI 入口
+Bull Hunter v6 — CLI 入口
 
-v4 模式:
+v6 架构: 选股层 (Agent 1+2+3+8) → 交易层 (Agent 5+6) → 监控层 (统一复盘)
+
+常用模式:
   # 每日预测 (轻量, 复用 latest 模型)
   python -m src.strategy.factor_model_selection.v3_bull_hunter.run_bull_hunter \
       --daily --scan_date 20260420
@@ -10,11 +12,11 @@ v4 模式:
   python -m src.strategy.factor_model_selection.v3_bull_hunter.run_bull_hunter \
       --train --scan_date 20260420
 
-  # 复盘 (Agent 4 双回路评估 + 可能触发重训)
+  # 复盘 (统一复盘: 选股层 + 交易层 + 可能触发重训)
   python -m src.strategy.factor_model_selection.v3_bull_hunter.run_bull_hunter \
       --review --scan_date 20260420
 
-  # Live 模式 (Agent 5/6/7 持仓管理闭环)
+  # Live 模式 (Agent 1→3→8→6→5 持仓管理闭环)
   python -m src.strategy.factor_model_selection.v3_bull_hunter.run_bull_hunter \
       --live --scan_date 20260420
 
@@ -46,10 +48,11 @@ from .agent2_train import TrainConfig
 from .agent3_predict import PredictConfig
 from .agent5_portfolio import PortfolioConfig
 from .agent6_exit_signal import ExitSignalConfig
+from .agent8_buy_signal import BuySignalConfig
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Bull Hunter v3 — 大牛股预测系统 (v4)")
+    parser = argparse.ArgumentParser(description="Bull Hunter v6 — 大牛股预测系统")
 
     # 模式
     parser.add_argument("--daily", action="store_true",
@@ -59,7 +62,7 @@ def main():
     parser.add_argument("--review", action="store_true",
                         help="复盘模式: Agent 4 双回路评估 + 可能触发重训")
     parser.add_argument("--live", action="store_true",
-                        help="Live 模式: Agent 1→3→6→5→7 持仓管理闭环")
+                        help="Live 模式: Agent 1→3→8→6→5 持仓管理闭环")
     parser.add_argument("--live-backtest", action="store_true",
                         help="Live 回测: 逐日模拟 live 循环, 验证持仓管理效果")
     parser.add_argument("--backtest", action="store_true",
@@ -114,9 +117,9 @@ def main():
     parser.add_argument("--no_exit_train", action="store_true",
                         help="禁用 Agent 6 退出模型训练")
 
-    # LLM
-    parser.add_argument("--use-llm", action="store_true",
-                        help="启用 LLM 因子顾问")
+    # Agent 8 (Buy Signal) 参数
+    parser.add_argument("--min_buy_quality", type=float, default=0.3,
+                        help="Agent 8 最低买入质量阈值 (默认 0.3)")
 
     args = parser.parse_args()
 
@@ -142,6 +145,7 @@ def main():
         max_positions=args.max_positions,
     )
     exit_cfg = ExitSignalConfig()
+    buy_signal_cfg = BuySignalConfig(min_buy_quality=args.min_buy_quality)
     pipe_cfg = PipelineConfig(
         cache_dir=args.cache_dir,
         data_dir=args.data_dir,
@@ -151,7 +155,7 @@ def main():
         predict_cfg=predict_cfg,
         portfolio_cfg=portfolio_cfg,
         exit_cfg=exit_cfg,
-        use_llm=args.use_llm,
+        buy_signal_cfg=buy_signal_cfg,
     )
 
     if args.daily:
@@ -221,7 +225,7 @@ def _print_live_result(result, args):
         return
 
     print(f"\n{'='*60}")
-    print(f"  Bull Hunter v4 — Live 持仓管理")
+    print(f"  Bull Hunter v6 — Live 持仓管理")
     print(f"  日期: {args.scan_date}")
     print(f"{'='*60}")
 
@@ -286,7 +290,7 @@ def _print_live_backtest_summary(result, args):
     stats = result.get("stats", {})
 
     print(f"\n{'='*60}")
-    print(f"  Bull Hunter v4 — Live 回测报告")
+    print(f"  Bull Hunter v6 — Live 回测报告")
     print(f"  回测区间: {args.start_date} ~ {args.end_date}")
     print(f"{'='*60}")
 
@@ -309,7 +313,7 @@ def _print_live_backtest_summary(result, args):
 def _print_daily_result(result, args):
     """打印每日预测结果。"""
     print(f"\n{'='*60}")
-    print(f"  Bull Hunter v3 — 每日 A 级候选")
+    print(f"  Bull Hunter v6 — 每日 A 级候选")
     print(f"  日期: {args.scan_date}")
     print(f"{'='*60}")
 
@@ -331,7 +335,7 @@ def _print_daily_result(result, args):
 def _print_review_result(health, args):
     """打印复盘结果。"""
     print(f"\n{'='*60}")
-    print(f"  Bull Hunter v3 — 复盘报告")
+    print(f"  Bull Hunter v6 — 复盘报告")
     print(f"  日期: {args.scan_date}")
     print(f"{'='*60}")
 
@@ -369,7 +373,7 @@ def _print_scan_result(result, args):
         return
 
     print(f"\n{'='*60}")
-    print(f"  Bull Hunter v3 — 扫描结果")
+    print(f"  Bull Hunter v6 — 扫描结果")
     print(f"  日期: {args.scan_date}")
     print(f"  候选: {len(result)} 只 A 级")
     print(f"{'='*60}")
@@ -392,7 +396,7 @@ def _print_backtest_summary(result, args):
     n_total = len(result)
 
     print(f"\n{'='*70}")
-    print(f"  Bull Hunter v3 — 回测报告")
+    print(f"  Bull Hunter v6 — 回测报告")
     print(f"  回测区间: {args.start_date} ~ {args.end_date}")
     print(f"  扫描间隔: 每 {args.interval_days} 个交易日")
     print(f"  扫描次数: {n_dates} 次, 总预测: {n_total} 条")

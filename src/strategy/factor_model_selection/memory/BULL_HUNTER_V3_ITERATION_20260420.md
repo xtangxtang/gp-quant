@@ -158,3 +158,73 @@ else:
 | V1 Baseline | `/tmp/bull_backtest_2025_v2.log` |
 | V2 因子扩展 | `/tmp/bull_backtest_v2.log` |
 | V3 分层剔除 | `/tmp/bull_backtest_v3.log` |
+| V4 Live v2 (Agent 4, 有 xgboost bug) | `/tmp/bt_agent4_v2.log` |
+| V4 Live v3 (Agent 4, 修复后) | `/tmp/bt_agent4_v3.log` |
+
+---
+
+## 六、V4 Live Backtest — Agent 4 整合 + Bug 修复 (2026-04-20 ~ 04-21)
+
+### 6.1 背景
+
+上述 V1-V3 是静态 interval backtest (每 20 天快照打分)。V4 转向 **Live Backtest**：
+模拟真实交易循环 (每日买卖 + 持仓管理 + Agent 6 退出模型 + Agent 4 周期监控)。
+
+### 6.2 代码改动 (5 项)
+
+| 文件 | 改动 |
+|------|------|
+| `pipeline.py` | `run_live()` 返回 `factor_snapshot`; `run_live_backtest()` 新增 `monitor_interval` 参数, 每 N 天调 Agent 4 `run_monitor()`, 检查 `retrain_required` → 触发 Agent 2 重训 |
+| `agent2_train.py` | 新增 `_extract_date()` 支持 `_retrain` 后缀目录; 新增 `_is_model_loadable()` 跳过 xgboost 模型; `MAX_MODEL_VERSIONS` 8→20 |
+| `run_bull_hunter.py` | 新增 `--monitor_interval` CLI 参数 |
+
+### 6.3 发现并修复 3 个 Bug
+
+| Bug | 症状 | 根因 | 修复 |
+|-----|------|------|------|
+| **`_retrain` 目录不可见** | Agent 4 重训的模型被忽略 | `d.isdigit()` 对 `20250103_retrain` 返回 False | `_extract_date()` 按 `_` 分割取首段 |
+| **xgboost 模型不可加载** | 82 天扫描失败 | 环境无 xgboost, `pickle.load()` 崩溃 | `_is_model_loadable()` 检查 `meta.json` model_type |
+| **模型清理过度** | Agent 4 频繁重训导致旧基础模型被删 | `MAX_MODEL_VERSIONS=8` 太小 | 增至 20 |
+
+### 6.4 Live Backtest 结果对比
+
+**命令**: `--live-backtest --start_date 20250101 --end_date 20251230 --retrain_interval 0 --monitor_interval 20`
+
+| 指标 | Live v2 (有 xgboost bug) | Live v3 (修复后) |
+|------|--------------------------|-------------------|
+| 交易笔数 | 10 | **13** |
+| 胜率 | 30% | **46.2%** |
+| 平均盈亏 | +2.5% | **+15.6%** |
+| 总盈亏 | +57,924 | **+349,873 (6x)** |
+| 最佳交易 | — | +122.5% (华丰股份) |
+| 最差交易 | — | -20.3% (星徽股份) |
+| Agent 4 重训次数 | 8 | **12** |
+| xgboost 错误天数 | **82** | **0** |
+
+### 6.5 关键发现: 分水岭 = 4月7日
+
+- 第一批 (初始模型 20250101, prob_200=0.14~0.39): **7 笔全部止损**, 合计 -174,332
+- 第二批 (Agent 4 重训模型, prob_200=0.44~0.65): **6 笔全部盈利**, 合计 +524,205
+- 卖出全由 **trailing stop** 触发 (最高点回撤 20-31%)
+- 华丰股份单笔 +122.5% (+243,761), 贡献总盈亏的 70%
+
+### 6.6 Bug 发现: 回路 A 漏选复盘未生效 (2026-04-21 修复)
+
+**症状**: 13 次 Agent 4 报告中 `missed_bull_replay = null`, `diagnosis = ""`, `actions = []`
+
+**根因**: `_replay_missed_bulls()` 硬拼路径 `bull_models/{scan_date}/`, 但实际模型目录都带 `_retrain` 后缀 → 路径永远不存在 → 直接 `return {}`
+
+**连锁后果**:
+1. 漏选复盘返回空 → `diagnosis = ""` → 所有调参分支跳过
+2. `actions = []` → 12 次重训全是"原样重训"(同因子、同参数、同模型)
+3. 重训全由回路 B (跟踪反馈胜率低) 触发, 回路 A 的 miss_rate=1.0 / 40 个 factor_blind_spots / 行业盲区分析全部白算
+
+**修复**: `agent4_monitor.py` `_replay_missed_bulls()` 改用 `get_model_for_date(cache_dir, scan_date)` 替代 `os.path.join(cache_dir, "bull_models", scan_date)`
+
+**影响**: 下次回测时回路 A 将正常产出 `threshold_issue`/`label_gap`/`factor_blind` 诊断, 驱动 Agent 2 做带调参重训 (降阈值/调权重/剔因子/换模型), 而非空 actions 的原样重训
+
+### 6.7 待验证
+
+- [ ] 修复后重跑 live backtest, 验证回路 A 诊断 + 带调参重训是否进一步提升收益
+- [ ] 观察 `diagnosis` 分布: threshold_issue vs label_gap vs factor_blind 哪个最常见
+- [ ] 带调参重训 vs 原样重训的模型 AUC 对比

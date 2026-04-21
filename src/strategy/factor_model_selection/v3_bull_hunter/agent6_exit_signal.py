@@ -1,11 +1,13 @@
 """
-Bull Hunter v4 — Agent 6: Exit Signal Trainer (卖出因子训练 Agent)
+Bull Hunter v6 — Agent 6: Exit Signal Trainer (卖出因子评估 Agent)
 
 职责:
   1. 每日对已持仓股票计算退出因子
   2. 训练/更新卖出信号模型 (基于历史卖出成功/失败经验)
   3. 输出每只持仓的 sell_weight (0~1) 和 sell_reason
-  4. 接收 Agent 7 Supervisor 的调参反馈
+  4. 提供 auto_adjust_exit_weights() 供统一复盘从相关性自适应调权
+
+共差子块提取: 与 Agent 8 对称的公共逻辑位于 _signal_common.py。
 
 退出因子 (EXIT_FACTORS):
   - 动量衰减: momentum 由正转负, 加速度为负
@@ -21,13 +23,12 @@ Bull Hunter v4 — Agent 6: Exit Signal Trainer (卖出因子训练 Agent)
 
 交互:
   Agent 6 → sell_weights → Agent 5 (Portfolio)
-  Agent 7 → directives  → Agent 6 (调整因子权重/阈值)
 
 持久化:
   results/bull_hunter/portfolio/exit_models/
-    rule_weights.json       # 规则引擎权重
+    rule_weights.json       # 规则引擎权重 (被 auto_adjust 覆写)
     exit_model.pkl          # 训练后的 LightGBM 模型 (可选)
-    exit_training_log.csv   # 训练样本记录
+    exit_model_meta.json    # 训练元数据
 """
 
 from __future__ import annotations
@@ -40,6 +41,8 @@ from dataclasses import dataclass, field
 
 import numpy as np
 import pandas as pd
+
+from . import _signal_common as _sc
 
 logger = logging.getLogger(__name__)
 
@@ -135,8 +138,8 @@ def run_exit_signal(
     model_dir = os.path.join(portfolio_dir, "exit_models")
     os.makedirs(model_dir, exist_ok=True)
 
-    # 加载规则权重 (可能被 Agent 7 更新过)
-    weights = _load_rule_weights(model_dir, cfg)
+    # 加载规则权重 (可能被 auto_adjust 更新过)
+    weights = _sc.load_rule_weights(model_dir, "rule_weights.json", DEFAULT_RULE_WEIGHTS)
 
     # ── 计算每只持仓的退出因子 ──
     results = []
@@ -172,13 +175,19 @@ def run_exit_signal(
 
     # 尝试用 LightGBM 模型覆盖 (如果可用)
     if cfg.use_model:
-        df = _apply_model_override(df, model_dir)
+        df = _sc.apply_model_override(
+            df, model_dir,
+            model_filename="exit_model.pkl",
+            feature_prefix="exit_",
+            output_col="sell_weight",
+            label="Agent 6",
+        )
 
     n_high = (df["sell_weight"] >= 0.6).sum() if not df.empty else 0
     logger.info(f"Agent 6 完成: {len(df)} 只持仓评估, {n_high} 只卖出权重 >= 0.6")
 
     # 保存当日卖出权重
-    _save_daily_weights(df, current_date, portfolio_dir)
+    _sc.save_daily_snapshot(df, current_date, portfolio_dir, subdir="sell_weights")
 
     return df
 
@@ -259,7 +268,7 @@ def train_exit_model(
             features.append(float(sym_row[col].iloc[0]) if col in sym_row.columns else 0.0)
 
         # 计算卖出后 20 天涨幅
-        post_sell_return = _get_post_trade_return(
+        post_sell_return = _sc.get_post_trade_return(
             data_dir, sym, sell_date, calendar, POST_SELL_DAYS
         )
         if post_sell_return is None:
@@ -290,7 +299,7 @@ def train_exit_model(
             held = sw_df[sw_df["sell_weight"] < 0.4]
             for _, row in held.iterrows():
                 sym = row["symbol"]
-                post_return = _get_post_trade_return(
+                post_return = _sc.get_post_trade_return(
                     data_dir, sym, date, calendar, POST_SELL_DAYS
                 )
                 if post_return is None:
@@ -372,35 +381,6 @@ def train_exit_model(
     return {"trained": True, "n_samples": len(X), "auc": round(auc, 4)}
 
 
-def _get_post_trade_return(
-    data_dir: str,
-    symbol: str,
-    trade_date: str,
-    calendar: list[str],
-    forward_days: int = 20,
-) -> float | None:
-    """计算交易后 N 个交易日的涨幅。"""
-    fpath = os.path.join(data_dir, f"{symbol}.csv")
-    if not os.path.exists(fpath):
-        return None
-    try:
-        df = pd.read_csv(fpath, usecols=["trade_date", "close"], dtype={"trade_date": str})
-        df = df.sort_values("trade_date").reset_index(drop=True)
-        match = df[df["trade_date"] == trade_date]
-        if match.empty:
-            return None
-        idx = match.index[0]
-        if idx + forward_days >= len(df):
-            return None
-        price_at_trade = df.at[idx, "close"]
-        price_after = df.at[idx + forward_days, "close"]
-        if price_at_trade <= 0:
-            return None
-        return (price_after - price_at_trade) / price_at_trade
-    except Exception:
-        return None
-
-
 # ─── 退出因子计算 ───
 
 def _compute_exit_factors(
@@ -427,7 +407,7 @@ def _compute_exit_factors(
     days_held = int(pos.get("days_held", 0))
 
     # 加载近期价格序列
-    prices = _load_recent_prices(data_dir, sym, current_date, calendar, lookback=60)
+    prices = _sc.load_recent_prices(data_dir, sym, current_date, calendar, lookback=60)
 
     # ── 1. 动量衰减 ──
     mom_20d = float(snap.get("momentum_20d", 0)) if snap else 0
@@ -533,75 +513,30 @@ def _generate_sell_reason(factors: dict, weights: dict, sell_weight: float) -> s
     return "|".join(top3)
 
 
-def _load_recent_prices(
+# ─── 自动权重调整 ───
+
+def auto_adjust_exit_weights(
+    portfolio_dir: str,
     data_dir: str,
-    symbol: str,
-    current_date: str,
     calendar: list[str],
-    lookback: int = 60,
-) -> np.ndarray | None:
-    """加载近期收盘价序列。"""
-    fpath = os.path.join(data_dir, f"{symbol}.csv")
-    if not os.path.exists(fpath):
-        return None
-    try:
-        df = pd.read_csv(fpath, usecols=["trade_date", "close"], dtype={"trade_date": str})
-        df = df[df["trade_date"] <= current_date].sort_values("trade_date")
-        if len(df) < lookback:
-            return df["close"].values if len(df) > 10 else None
-        return df["close"].values[-lookback:]
-    except Exception:
-        return None
+    cfg: ExitSignalConfig | None = None,
+) -> dict:
+    """
+    基于历史卖出因子 vs 卖后收益的 Spearman 相关性, 自动调整规则引擎权重。
+    薄包装: 委托给 _signal_common.auto_adjust_signal_weights (sell 方向)。
+    """
+    cfg = cfg or ExitSignalConfig()
+    return _sc.auto_adjust_signal_weights(
+        portfolio_dir=portfolio_dir,
+        data_dir=data_dir,
+        calendar=calendar,
+        direction="sell",
+        factors=EXIT_FACTORS,
+        default_weights=DEFAULT_RULE_WEIGHTS,
+        feature_prefix="exit_",
+        snapshot_subdir="sell_weights",
+        model_subdir="exit_models",
+        weights_filename="rule_weights.json",
+        label="Agent 6",
+    )
 
-
-def _load_rule_weights(model_dir: str, cfg: ExitSignalConfig) -> dict:
-    """加载规则引擎权重 (优先读持久化文件, 否则用配置默认)。"""
-    weights_path = os.path.join(model_dir, "rule_weights.json")
-    if os.path.exists(weights_path):
-        try:
-            with open(weights_path) as f:
-                return json.load(f)
-        except Exception:
-            pass
-    return dict(cfg.rule_weights)
-
-
-def save_rule_weights(model_dir: str, weights: dict):
-    """保存规则引擎权重 (Agent 7 调优后调用)。"""
-    weights_path = os.path.join(model_dir, "rule_weights.json")
-    os.makedirs(model_dir, exist_ok=True)
-    with open(weights_path, "w", encoding="utf-8") as f:
-        json.dump(weights, f, ensure_ascii=False, indent=2)
-    logger.info(f"Agent 6: 规则权重已更新 → {weights_path}")
-
-
-def _apply_model_override(df: pd.DataFrame, model_dir: str) -> pd.DataFrame:
-    """如果有训练好的模型, 用模型预测覆盖规则评分。"""
-    model_path = os.path.join(model_dir, "exit_model.pkl")
-    if not os.path.exists(model_path):
-        return df
-
-    try:
-        with open(model_path, "rb") as f:
-            model = pickle.load(f)
-
-        exit_cols = [c for c in df.columns if c.startswith("exit_")]
-        if not exit_cols:
-            return df
-
-        X = df[exit_cols].fillna(0).values
-        proba = model.predict_proba(X)[:, 1]
-        df["sell_weight"] = np.round(proba, 4)
-        logger.info("Agent 6: 使用训练模型覆盖规则评分")
-    except Exception as e:
-        logger.warning(f"Agent 6: 模型预测失败, 使用规则评分: {e}")
-
-    return df
-
-
-def _save_daily_weights(df: pd.DataFrame, current_date: str, portfolio_dir: str):
-    """保存每日卖出权重 (供 Agent 7 分析)。"""
-    out_dir = os.path.join(portfolio_dir, "sell_weights")
-    os.makedirs(out_dir, exist_ok=True)
-    out_path = os.path.join(out_dir, f"{current_date}.csv")
-    df.to_csv(out_path, index=False, encoding="utf-8-sig")

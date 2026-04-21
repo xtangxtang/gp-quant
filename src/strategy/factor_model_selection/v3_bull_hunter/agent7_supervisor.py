@@ -1,165 +1,42 @@
 """
-Bull Hunter v4 — Agent 7: Execution Supervisor (交互式监控优化 Agent)
+Bull Hunter v6 — Review Helpers (formerly Agent 7 Supervisor)
 
-职责:
-  1. 监控 Agent 5 (Portfolio) 的买卖决策质量
-  2. 监控 Agent 6 (Exit Signal) 的卖出信号准确性
-  3. 与 Agent 5 交互: 调整买入条件/仓位/止损参数
-  4. 与 Agent 6 交互: 调整退出因子权重/阈值
-  5. 周期性评估: 交易绩效 vs 基准, 信号有效性
+v6 简化:
+  原 Agent 7 (run_supervisor 每日干预) 已被 pipeline.run_unified_review 替代,
+  本模块仅保留统一复盘所需的纯函数工具:
+    - _evaluate_performance / _evaluate_exit_signals  : 交易+信号质量评估
+    - _eval_buy_quality / _eval_sell_timing           : 买卖时机评估
+    - _check_intervention_needed                      : 是否需要参数干预
+    - _generate_agent5_directives                     : Agent 5 阈值/止损调整
+    - _generate_agent6_directives                     : Agent 6 通用调整 (因子权重交由 auto_adjust_exit_weights)
+    - apply_directives                                : 把指令落到 PortfolioConfig / ExitSignalConfig
 
-反馈回路:
-  ┌─────────────┐      directives       ┌─────────────┐
-  │   Agent 5   │ ◄──────────────────── │   Agent 7   │
-  │ (Portfolio) │ ────────────────────► │(Supervisor) │
-  └─────────────┘   buy/sell results    └──────┬──────┘
-                                               │ directives
-  ┌─────────────┐      directives       ┌──────▼──────┐
-  │   Agent 6   │ ◄──────────────────── │   Agent 7   │
-  │(Exit Signal)│ ────────────────────► │(Supervisor) │
-  └─────────────┘   signal accuracy     └─────────────┘
-
-评估维度:
-  A. 买入质量: 买入后 N 天的涨幅分布, 是否跑赢大盘
-  B. 卖出时机: 卖出后继续涨还是继续跌
-  C. 持有效率: 持有期间的盈亏比, 最大回撤
-  D. 信号有效性: Agent 6 sell_weight vs 实际表现的相关性
-
-持久化:
-  results/bull_hunter/portfolio/supervisor/
-    supervisor_log.csv       # 每日评估日志
-    directives_history.json  # 历史调优指令
-    performance_report.json  # 最新绩效报告
+注意: Agent 6 因子权重的相关性自适应已统一由 agent6_exit_signal.auto_adjust_exit_weights()
+处理, 本模块不再生成 adjust_factor_weight / reset_weights 类型指令。
 """
 
 from __future__ import annotations
 
-import json
 import logging
 import os
-from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
 
 from .agent5_portfolio import PortfolioConfig
-from .agent6_exit_signal import ExitSignalConfig, save_rule_weights, MIN_TRAIN_SAMPLES
+from .agent6_exit_signal import ExitSignalConfig
 
 logger = logging.getLogger(__name__)
 
 # ── 评估阈值 ──
-# 买入质量: 买入后 10 天平均涨幅低于此值 → 需要调整
 MIN_BUY_QUALITY_10D = -0.03
-# 卖出准确率: 卖出后 10 天涨幅 > 10% 的比例 (卖早了) 超此值 → 需调整
 MAX_PREMATURE_SELL_RATE = 0.40
-# 最小胜率
 MIN_WIN_RATE = 0.40
-# 最大平均亏损
 MAX_AVG_LOSS = -0.15
-# 评估间隔 (至少 N 笔新交易后才评估)
 MIN_TRADES_FOR_EVAL = 5
 
 # 调参步长限制
-MAX_WEIGHT_ADJUSTMENT = 0.05   # 单个权重最大调整幅度
-MAX_THRESHOLD_ADJUSTMENT = 0.10  # 阈值最大调整幅度
-
-
-@dataclass
-class SupervisorState:
-    """Supervisor 状态 (跨日保持)。"""
-    last_eval_date: str = ""
-    last_eval_n_trades: int = 0
-    total_directives_issued: int = 0
-    consecutive_underperform: int = 0
-
-
-def run_supervisor(
-    portfolio_dir: str,
-    data_dir: str,
-    current_date: str,
-    calendar: list[str],
-    portfolio_cfg: PortfolioConfig,
-    exit_cfg: ExitSignalConfig,
-    today_result: dict | None = None,
-) -> dict:
-    """
-    Agent 7 每日运行: 评估 + 生成调优指令。
-
-    Args:
-        portfolio_dir: 持仓管理目录
-        data_dir: 日线数据目录
-        current_date: 当日日期
-        calendar: 交易日历
-        portfolio_cfg: Agent 5 当前配置
-        exit_cfg: Agent 6 当前配置
-        today_result: Agent 5 当日的买卖结果
-
-    Returns:
-        {
-            "evaluation": {...},           # 绩效评估
-            "agent5_directives": {...},    # 给 Agent 5 的调参指令
-            "agent6_directives": {...},    # 给 Agent 6 的调参指令
-            "should_retrain_exit": bool,   # 是否触发 Agent 6 重训
-            "status": str,                 # healthy / warning / critical
-        }
-    """
-    supervisor_dir = os.path.join(portfolio_dir, "supervisor")
-    os.makedirs(supervisor_dir, exist_ok=True)
-
-    result = {
-        "evaluation": {},
-        "agent5_directives": {},
-        "agent6_directives": {},
-        "should_retrain_exit": False,
-        "status": "healthy",
-    }
-
-    # 加载状态
-    state = _load_state(supervisor_dir)
-
-    # ── 1. 评估交易绩效 ──
-    evaluation = _evaluate_performance(portfolio_dir, data_dir, calendar, current_date)
-    result["evaluation"] = evaluation
-
-    # ── 2. 评估 Agent 6 信号质量 ──
-    signal_eval = _evaluate_exit_signals(portfolio_dir, data_dir, calendar, current_date)
-    evaluation["signal_quality"] = signal_eval
-
-    # ── 3. 判断是否需要干预 ──
-    needs_intervention, issues = _check_intervention_needed(evaluation, state)
-
-    if not needs_intervention:
-        logger.info(f"Agent 7: 绩效正常, 无需干预 (status=healthy)")
-        result["status"] = "healthy"
-        state.consecutive_underperform = 0
-    else:
-        state.consecutive_underperform += 1
-        severity = "warning" if state.consecutive_underperform < 3 else "critical"
-        result["status"] = severity
-        logger.info(f"Agent 7: 检测到 {len(issues)} 个问题, status={severity}")
-        for issue in issues:
-            logger.info(f"  ⚠️ {issue}")
-
-        # ── 4. 生成调优指令 ──
-        a5_directives = _generate_agent5_directives(evaluation, issues, portfolio_cfg)
-        a6_directives = _generate_agent6_directives(evaluation, signal_eval, issues, exit_cfg, portfolio_dir)
-        result["agent5_directives"] = a5_directives
-        result["agent6_directives"] = a6_directives
-
-        # ── 5. 判断是否需要重训 Agent 6 模型 ──
-        if signal_eval.get("correlation", 0) < 0.1 and evaluation.get("n_sells", 0) >= MIN_TRAIN_SAMPLES:
-            result["should_retrain_exit"] = True
-            logger.info("  🔄 触发 Agent 6 卖出模型重训")
-
-    # ── 6. 记录日志 ──
-    _log_evaluation(supervisor_dir, current_date, evaluation, result)
-
-    # 更新状态
-    state.last_eval_date = current_date
-    state.last_eval_n_trades = evaluation.get("n_total_trades", 0)
-    _save_state(supervisor_dir, state)
-
-    return result
+MAX_THRESHOLD_ADJUSTMENT = 0.10
 
 
 def apply_directives(
@@ -170,17 +47,16 @@ def apply_directives(
     portfolio_dir: str,
 ) -> tuple[PortfolioConfig, ExitSignalConfig]:
     """
-    应用 Agent 7 的调参指令, 返回更新后的配置。
+    应用统一复盘的调参指令, 返回更新后的配置。
 
     Agent 5 指令类型:
-      - adjust_sell_threshold: 调整卖出权重阈值
-      - adjust_stop_loss: 调整止损线
-      - adjust_trailing_stop: 调整 trailing stop 参数
-      - adjust_max_positions: 调整最大持仓数
+      - adjust_sell_threshold
+      - adjust_stop_loss
 
     Agent 6 指令类型:
-      - adjust_factor_weight: 调整退出因子权重
-      - reset_weights: 重置为默认权重
+      - (因子权重由 auto_adjust_exit_weights 处理, 此处仅保留扩展位)
+
+    portfolio_dir 参数保留用于将来可能的持久化, 当前未使用。
     """
     new_p_cfg = portfolio_cfg
     new_e_cfg = exit_cfg
@@ -203,7 +79,7 @@ def apply_directives(
                 min_hold_days=new_p_cfg.min_hold_days,
                 min_prob_200=new_p_cfg.min_prob_200,
             )
-            logger.info(f"  Agent 7 → Agent 5: sell_threshold {old:.2f} → {new_val:.2f}")
+            logger.info(f"  调参 → Agent 5: sell_threshold {old:.2f} → {new_val:.2f}")
 
         elif atype == "adjust_stop_loss":
             old = new_p_cfg.stop_loss_pct
@@ -219,49 +95,10 @@ def apply_directives(
                 min_hold_days=new_p_cfg.min_hold_days,
                 min_prob_200=new_p_cfg.min_prob_200,
             )
-            logger.info(f"  Agent 7 → Agent 5: stop_loss {old:.2f} → {new_val:.2f}")
+            logger.info(f"  调参 → Agent 5: stop_loss {old:.2f} → {new_val:.2f}")
 
-    # ── Agent 6 指令 ──
-    for action in agent6_directives.get("actions", []):
-        atype = action.get("type", "")
-
-        if atype == "adjust_factor_weight":
-            factor = action.get("factor", "")
-            delta = _clamp(action.get("delta", 0), -MAX_WEIGHT_ADJUSTMENT, MAX_WEIGHT_ADJUSTMENT)
-            new_weights = dict(new_e_cfg.rule_weights)
-            if factor in new_weights:
-                old_w = new_weights[factor]
-                new_w = max(0, min(0.30, old_w + delta))
-                new_weights[factor] = round(new_w, 4)
-                logger.info(f"  Agent 7 → Agent 6: {factor} 权重 {old_w:.3f} → {new_w:.3f}")
-
-            # 重新归一化
-            total = sum(new_weights.values())
-            if total > 0:
-                new_weights = {k: round(v / total, 4) for k, v in new_weights.items()}
-
-            new_e_cfg = ExitSignalConfig(
-                rule_weights=new_weights,
-                use_model=new_e_cfg.use_model,
-                retrain_interval=new_e_cfg.retrain_interval,
-                target_gain=new_e_cfg.target_gain,
-                max_hold_days=new_e_cfg.max_hold_days,
-            )
-
-            # 持久化新权重
-            model_dir = os.path.join(portfolio_dir, "exit_models")
-            save_rule_weights(model_dir, new_weights)
-
-        elif atype == "reset_weights":
-            from .agent6_exit_signal import DEFAULT_RULE_WEIGHTS
-            new_e_cfg = ExitSignalConfig(
-                rule_weights=dict(DEFAULT_RULE_WEIGHTS),
-                use_model=new_e_cfg.use_model,
-                retrain_interval=new_e_cfg.retrain_interval,
-                target_gain=new_e_cfg.target_gain,
-                max_hold_days=new_e_cfg.max_hold_days,
-            )
-            logger.info("  Agent 7 → Agent 6: 重置为默认权重")
+    # ── Agent 6 指令 (预留, 当前因子权重由 auto_adjust 处理) ──
+    # 此处保留扩展点, 暂不消费任何 action
 
     return new_p_cfg, new_e_cfg
 
@@ -292,7 +129,6 @@ def _evaluate_performance(
     if sells.empty:
         return eval_result
 
-    # 胜率
     wins = sells[sells["pnl"] > 0]
     eval_result["win_rate"] = round(len(wins) / len(sells), 4)
     eval_result["avg_pnl_pct"] = round(float(sells["pnl_pct"].mean()), 4)
@@ -301,7 +137,6 @@ def _evaluate_performance(
     eval_result["best_trade"] = round(float(sells["pnl_pct"].max()), 4)
     eval_result["worst_trade"] = round(float(sells["pnl_pct"].min()), 4)
 
-    # 按原因分类
     reason_stats = {}
     for reason in sells["reason"].unique():
         subset = sells[sells["reason"] == reason]
@@ -312,14 +147,8 @@ def _evaluate_performance(
         }
     eval_result["by_reason"] = reason_stats
 
-    # 买入质量: 最近 10 笔买入后 10 天的表现
-    buy_quality = _eval_buy_quality(buys, data_dir, calendar, current_date, lookback_trades=10)
-    eval_result["buy_quality"] = buy_quality
-
-    # 卖出时机: 卖出后是否继续涨
-    sell_timing = _eval_sell_timing(sells, data_dir, calendar, current_date, lookback_trades=10)
-    eval_result["sell_timing"] = sell_timing
-
+    eval_result["buy_quality"] = _eval_buy_quality(buys, data_dir, calendar, current_date, lookback_trades=10)
+    eval_result["sell_timing"] = _eval_sell_timing(sells, data_dir, calendar, current_date, lookback_trades=10)
     return eval_result
 
 
@@ -334,14 +163,11 @@ def _evaluate_exit_signals(
     if not os.path.exists(weights_dir):
         return {"correlation": 0, "n_samples": 0}
 
-    # 读取历史卖出权重
     weight_files = sorted([f for f in os.listdir(weights_dir) if f.endswith(".csv")])
     if not weight_files:
         return {"correlation": 0, "n_samples": 0}
 
-    # 只看最近 30 个文件
     weight_files = weight_files[-30:]
-
     samples = []
     date_set = set(calendar)
 
@@ -354,10 +180,9 @@ def _evaluate_exit_signals(
 
         if "symbol" not in df.columns or "sell_weight" not in df.columns:
             continue
-
-        # 计算该日期后 10 天的实际涨幅
         if date_str not in date_set:
             continue
+
         d_idx = calendar.index(date_str)
         fwd_idx = min(d_idx + 10, len(calendar) - 1)
         fwd_date = calendar[fwd_idx]
@@ -365,7 +190,6 @@ def _evaluate_exit_signals(
         for _, row in df.iterrows():
             sym = row["symbol"]
             sw = float(row["sell_weight"])
-            # 获取 forward return
             close_now = _get_price_cached(data_dir, sym, date_str)
             close_fwd = _get_price_cached(data_dir, sym, fwd_date)
             if close_now and close_fwd and close_now > 0:
@@ -376,10 +200,7 @@ def _evaluate_exit_signals(
         return {"correlation": 0, "n_samples": len(samples)}
 
     df_samples = pd.DataFrame(samples)
-    # sell_weight 高 → fwd_return 应该低 (负相关 = 好)
     corr = float(df_samples["sell_weight"].corr(df_samples["fwd_return"]))
-
-    # 按 sell_weight 分组看效果
     high_sw = df_samples[df_samples["sell_weight"] >= 0.6]
     low_sw = df_samples[df_samples["sell_weight"] < 0.3]
 
@@ -477,39 +298,34 @@ def _eval_sell_timing(
 
 # ─── 干预判断 ───
 
-def _check_intervention_needed(evaluation: dict, state: SupervisorState) -> tuple[bool, list[str]]:
-    """判断是否需要干预。"""
+def _check_intervention_needed(evaluation: dict) -> tuple[bool, list[str]]:
+    """判断是否需要参数干预 (v6: 无状态, 纯基于当期评估)。"""
     issues = []
 
     n_sells = evaluation.get("n_sells", 0)
     if n_sells < MIN_TRADES_FOR_EVAL:
         return False, []
 
-    # 胜率太低
     win_rate = evaluation.get("win_rate", 1.0)
     if win_rate < MIN_WIN_RATE:
         issues.append(f"胜率过低: {win_rate:.1%} (阈值 {MIN_WIN_RATE:.0%})")
 
-    # 平均亏损太大
     avg_pnl = evaluation.get("avg_pnl_pct", 0)
     if avg_pnl < MAX_AVG_LOSS:
         issues.append(f"平均亏损过大: {avg_pnl:+.1%} (阈值 {MAX_AVG_LOSS:+.0%})")
 
-    # 买入质量差
     buy_q = evaluation.get("buy_quality", {})
     if buy_q.get("avg_gain_10d", 0) < MIN_BUY_QUALITY_10D:
         issues.append(f"买入质量差: 10日平均 {buy_q['avg_gain_10d']:+.1%}")
 
-    # 卖出过早
     sell_t = evaluation.get("sell_timing", {})
     if sell_t.get("premature_sell_rate", 0) > MAX_PREMATURE_SELL_RATE:
         issues.append(f"卖出过早: {sell_t['premature_sell_rate']:.0%} 卖出后 10 天涨超 10%")
 
-    # 信号质量差
     sig_q = evaluation.get("signal_quality", {})
     if sig_q.get("n_samples", 0) >= 20:
         corr = sig_q.get("correlation", 0)
-        if corr > 0.05:  # 正相关 = sell_weight 高但后续反而涨, 信号反了
+        if corr > 0.05:
             issues.append(f"退出信号反向: 相关性 {corr:+.3f} (应为负)")
 
     return len(issues) > 0, issues
@@ -522,14 +338,12 @@ def _generate_agent5_directives(
     issues: list[str],
     cfg: PortfolioConfig,
 ) -> dict:
-    """生成给 Agent 5 的调参指令。"""
+    """生成给 Agent 5 的调参指令 (阈值/止损)。"""
     actions = []
 
-    buy_q = evaluation.get("buy_quality", {})
     sell_t = evaluation.get("sell_timing", {})
     win_rate = evaluation.get("win_rate", 1.0)
 
-    # 胜率低 → 提高卖出阈值 (更不容易卖, 多持有)
     if win_rate < MIN_WIN_RATE:
         actions.append({
             "type": "adjust_sell_threshold",
@@ -537,7 +351,6 @@ def _generate_agent5_directives(
             "reason": f"胜率低({win_rate:.0%}), 提高卖出门槛",
         })
 
-    # 卖出过早 → 提高卖出阈值
     if sell_t.get("premature_sell_rate", 0) > MAX_PREMATURE_SELL_RATE:
         actions.append({
             "type": "adjust_sell_threshold",
@@ -545,16 +358,15 @@ def _generate_agent5_directives(
             "reason": f"卖出过早({sell_t['premature_sell_rate']:.0%}), 提高门槛",
         })
 
-    # 亏损大 → 收紧止损
     worst = evaluation.get("worst_trade", 0)
     if worst < -0.25:
         actions.append({
             "type": "adjust_stop_loss",
-            "delta": 0.03,  # 收紧 (更接近 0)
+            "delta": 0.03,
             "reason": f"最差交易 {worst:+.0%}, 收紧止损",
         })
 
-    return {"actions": actions[:3]}  # 限制最多 3 个指令
+    return {"actions": actions[:3]}
 
 
 def _generate_agent6_directives(
@@ -564,131 +376,25 @@ def _generate_agent6_directives(
     cfg: ExitSignalConfig,
     portfolio_dir: str,
 ) -> dict:
-    """生成给 Agent 6 的调参指令。"""
-    actions = []
+    """
+    生成给 Agent 6 的调参指令。
 
-    sell_t = evaluation.get("sell_timing", {})
-    by_reason = evaluation.get("by_reason", {})
+    v6 简化: 因子权重的相关性自适应已交由 auto_adjust_exit_weights 统一处理,
+    本函数仅保留 should_retrain_model 提示, 不再生成权重调整指令。
+    """
+    suggestions = []
 
-    # 分析哪类卖出原因效果最差
-    worst_reason = None
-    worst_pnl = 0
-    for reason, stats in by_reason.items():
-        if stats.get("count", 0) >= 3 and stats.get("avg_pnl_pct", 0) < worst_pnl:
-            worst_pnl = stats["avg_pnl_pct"]
-            worst_reason = reason
-
-    # 如果某类卖出原因亏损严重, 降低对应因子权重
-    if worst_reason and worst_pnl < -0.10:
-        # 解析 reason 中的因子 (格式: "momentum_decay(0.15)|vol_expansion(0.08)")
-        factor_to_adjust = _extract_factor_from_reason(worst_reason)
-        if factor_to_adjust:
-            actions.append({
-                "type": "adjust_factor_weight",
-                "factor": factor_to_adjust,
-                "delta": -0.02,
-                "reason": f"'{worst_reason}' 类卖出平均亏损 {worst_pnl:+.1%}",
-            })
-
-    # 信号反向 → 重置权重
     corr = signal_eval.get("correlation", 0)
-    if corr > 0.10 and signal_eval.get("n_samples", 0) >= 20:
-        actions.append({
-            "type": "reset_weights",
-            "reason": f"退出信号反向 (corr={corr:+.3f}), 重置为默认",
-        })
+    n_samples = signal_eval.get("n_samples", 0)
+    if corr > 0.10 and n_samples >= 20:
+        suggestions.append(f"退出信号反向 (corr={corr:+.3f}), 建议触发 Agent 6 模型重训")
 
-    # 高权重信号的效果
     high_fwd = signal_eval.get("high_weight_avg_fwd", 0)
     low_fwd = signal_eval.get("low_weight_avg_fwd", 0)
+    if high_fwd > low_fwd + 0.02 and n_samples >= 20:
+        suggestions.append(f"高权重组反而涨更多 ({high_fwd:+.1%} vs {low_fwd:+.1%}), 建议重训")
 
-    # 如果高权重组 forward return 比低权重组还高 → 信号无效
-    if high_fwd > low_fwd + 0.02 and signal_eval.get("n_samples", 0) >= 20:
-        actions.append({
-            "type": "reset_weights",
-            "reason": f"高权重组反而涨更多 ({high_fwd:+.1%} vs {low_fwd:+.1%})",
-        })
-
-    return {"actions": actions[:3]}
-
-
-def _extract_factor_from_reason(reason: str) -> str | None:
-    """从卖出原因字符串中提取因子名。"""
-    # 格式: "exit_signal(w=0.75)" 或 "momentum_decay(0.15)|vol_expansion(0.08)"
-    if "(" in reason:
-        factor = reason.split("(")[0].strip()
-        # 移除 exit_ 前缀
-        if factor.startswith("exit_"):
-            factor = factor[5:]
-        if factor in DEFAULT_RULE_WEIGHTS_KEYS:
-            return factor
-    return None
-
-
-# 用于 _extract_factor_from_reason
-DEFAULT_RULE_WEIGHTS_KEYS = {
-    "momentum_decay", "momentum_accel", "vol_expansion", "vol_spike",
-    "entropy_disorder", "irrev_collapse", "mf_outflow_accel", "mf_streak_negative",
-    "below_ma20", "below_ma60", "atr_anomaly", "drawdown_from_peak",
-    "gain_vs_target", "holding_days_norm",
-}
-
-
-# ─── 状态持久化 ───
-
-def _load_state(supervisor_dir: str) -> SupervisorState:
-    state_path = os.path.join(supervisor_dir, "state.json")
-    if os.path.exists(state_path):
-        try:
-            with open(state_path) as f:
-                data = json.load(f)
-            return SupervisorState(**{k: data[k] for k in SupervisorState.__dataclass_fields__ if k in data})
-        except Exception:
-            pass
-    return SupervisorState()
-
-
-def _save_state(supervisor_dir: str, state: SupervisorState):
-    state_path = os.path.join(supervisor_dir, "state.json")
-    with open(state_path, "w", encoding="utf-8") as f:
-        json.dump({
-            "last_eval_date": state.last_eval_date,
-            "last_eval_n_trades": state.last_eval_n_trades,
-            "total_directives_issued": state.total_directives_issued,
-            "consecutive_underperform": state.consecutive_underperform,
-        }, f, ensure_ascii=False, indent=2)
-
-
-def _log_evaluation(supervisor_dir: str, date: str, evaluation: dict, result: dict):
-    """记录每日评估日志。"""
-    log_path = os.path.join(supervisor_dir, "supervisor_log.csv")
-    row = {
-        "date": date,
-        "status": result.get("status", ""),
-        "n_sells": evaluation.get("n_sells", 0),
-        "win_rate": evaluation.get("win_rate", 0),
-        "avg_pnl_pct": evaluation.get("avg_pnl_pct", 0),
-        "n_a5_directives": len(result.get("agent5_directives", {}).get("actions", [])),
-        "n_a6_directives": len(result.get("agent6_directives", {}).get("actions", [])),
-        "retrain_exit": result.get("should_retrain_exit", False),
-    }
-
-    if os.path.exists(log_path):
-        try:
-            df = pd.read_csv(log_path, dtype={"date": str})
-            df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
-        except Exception:
-            df = pd.DataFrame([row])
-    else:
-        df = pd.DataFrame([row])
-
-    df.to_csv(log_path, index=False, encoding="utf-8-sig")
-
-    # 保存详细报告
-    report_path = os.path.join(supervisor_dir, "performance_report.json")
-    with open(report_path, "w", encoding="utf-8") as f:
-        json.dump({"date": date, "evaluation": evaluation, "result": result},
-                  f, ensure_ascii=False, indent=2, default=str)
+    return {"actions": [], "suggestions": suggestions}
 
 
 # ─── 辅助 ───

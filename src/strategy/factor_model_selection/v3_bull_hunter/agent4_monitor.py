@@ -1,7 +1,8 @@
 """
-Bull Hunter v3 — Agent 4: 双回路反馈监控
+Bull Hunter v6 — Agent 4: 双回路反馈监控 (选股层 Agent 1/2/3 调参)
 
-v4 重构: 聚焦 A 类大牛股, 双回路闭环优化。
+聚焦 A 类大牛股, 双回路闭环优化。在 v6 中, Agent 4 是统一复盘
+(run_unified_review) 的"选股层"评估子系统, 与 Agent 6/8 自适应权重并行运行。
 
 回路 A — 漏网之鱼 (Missed Bull Analysis):
   每次 Agent 2 重训后, 回看上一周期:
@@ -39,7 +40,7 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-from .agent2_train import DAILY_FACTORS, TARGETS
+from .agent2_train import DAILY_FACTORS, TARGETS, get_model_for_date
 
 
 # ── 健康阈值 ──
@@ -66,7 +67,6 @@ def run_monitor(
     factor_snapshot: pd.DataFrame | None = None,
     current_predictions: pd.DataFrame | None = None,
     basic_path: str = "",
-    use_llm: bool = False,
     tracking_summary: dict | None = None,
     expired_evals: pd.DataFrame | None = None,
 ) -> dict:
@@ -81,7 +81,6 @@ def run_monitor(
         factor_snapshot: Agent 1 全市场因子截面
         current_predictions: Agent 3 当期预测
         basic_path: tushare_stock_basic.csv 路径
-        use_llm: 是否启用 LLM 因子顾问
         tracking_summary: tracker 状态摘要 (回路 B)
         expired_evals: tracker 到期评估结果 (回路 B)
 
@@ -281,7 +280,7 @@ def run_monitor(
             report["suggestions"].append(f"[跟踪] {s}")
 
     # ── 6. 生成结构化调参指令 ──
-    tuning = _generate_tuning_directives(report, training_meta, use_llm=use_llm)
+    tuning = _generate_tuning_directives(report, training_meta)
     if tuning:
         report["tuning_directives"] = tuning
         if tuning.get("retrain_required"):
@@ -855,8 +854,8 @@ def _replay_missed_bulls(
             "diagnosis": "threshold_issue|factor_blind|label_gap",
         }
     """
-    model_dir = os.path.join(cache_dir, "bull_models", scan_date)
-    if not os.path.exists(model_dir):
+    model_dir = get_model_for_date(cache_dir, scan_date)
+    if not model_dir:
         return {}
 
     # 加载模型
@@ -1019,26 +1018,20 @@ def _count_training_positives(
 def _generate_tuning_directives(
     report: dict,
     training_meta: dict,
-    use_llm: bool = False,
 ) -> dict:
     """
-    从 Agent 4 双回路诊断结果生成结构化调参指令。
+    从诊断结果生成 L1 调参指令 (v6 简化版)。
 
-    输入来源:
-      - 回路 A: miss_diagnosis, missed_bull_replay (漏网之鱼)
-      - 回路 B: tracking_feedback (Top 5 跟踪到期评估)
-      - 模型健康: health (AUC, precision, recall)
-
-    安全限制:
-      - 单次最多 MAX_ACTIONS_PER_DIRECTIVE 个修改动作
-      - 不含信息类 (flag_*) 和阈值调整 (Agent 3 层面)
+    v6 简化:
+      - 仅保留 Level 1 调参 (阈值/权重/回看窗口)
+      - 移除 Level 2 (因子增删) 和 Level 3 (模型切换)
+      - 统一健康评分驱动重训决策
 
     返回格式:
     {
         "retrain_required": bool,
         "reason": str,
         "diagnosis": str,
-        "escalation_level": int,    # 1=调参 2=换因子 3=换模型
         "actions": [...]
     }
     """
@@ -1053,52 +1046,14 @@ def _generate_tuning_directives(
     miss_rate = miss_diag.get("miss_rate", 0)
     diagnosis = replay.get("diagnosis", "")
 
-    # 回路 B 信号
+    # 跟踪反馈信号
     tracking_retrain = tracking.get("retrain_needed", False)
     tracking_win_rate = tracking.get("win_rate", 1.0)
     tracking_loss_rate = tracking.get("loss_rate", 0.0)
 
-    # ── 确定当前迭代轮次 (从 meta 中读 model_type 推断) ──
-    current_model = "lgbm"
-    current_drop_factors = []
-    for tname, tmeta in training_meta.items():
-        if isinstance(tmeta, dict):
-            current_model = tmeta.get("model_type", "lgbm")
-            current_drop_factors = tmeta.get("drop_factors", [])
-            break
-
-    # ── 方案 A: LLM 因子顾问 ──
-    llm_advice = {}
-    if use_llm and miss_rate > 0.5:
-        try:
-            from .llm_advisor import run_factor_advisor
-            llm_advice = run_factor_advisor(
-                training_meta=training_meta,
-                miss_diagnosis=miss_diag,
-                missed_bull_replay=replay,
-                factor_blind_spots=miss_diag.get("factor_blind_spots", []),
-                blind_industries=miss_diag.get("blind_industries", []),
-                current_model=current_model,
-                current_drop_factors=current_drop_factors,
-            )
-        except Exception as e:
-            logger.warning(f"  LLM 因子顾问调用失败: {e}")
-
-    # ── 分析因子有效性 ──
-    factor_blind_spots = miss_diag.get("factor_blind_spots", [])
-    blind_industries = miss_diag.get("blind_industries", [])
-
-    # 低重要性因子: 在所有 target 模型中排名倒数的因子
-    low_importance_factors = _identify_low_importance_factors(training_meta)
-    # 方向错误因子: 漏选大牛股均值方向与模型偏好相反 (norm_diff > 1.5)
-    wrong_direction_factors = [
-        s["factor"] for s in factor_blind_spots
-        if s.get("norm_diff", 0) > 1.5
-    ]
-
-    # ── Level 1: 调参 ──
+    # ── L1: 阈值调整 ──
     if diagnosis == "threshold_issue":
-        for tname in ["200pct", "100pct", "30pct"]:
+        for tname in ["200pct", "100pct"]:
             tmeta = training_meta.get(tname, {})
             old_thresh = tmeta.get("best_threshold", 0.15)
             new_thresh = max(old_thresh * 0.5, 0.01)
@@ -1110,8 +1065,8 @@ def _generate_tuning_directives(
             })
         reasons.append("漏选大牛股概率 > 阈值的50%, 降低阈值可捕获")
 
-    elif diagnosis == "label_gap" and not current_drop_factors:
-        # 第一次 label_gap: 先调参
+    # ── L1: 正样本权重 + 训练深度 ──
+    elif diagnosis == "label_gap":
         actions.append({
             "type": "adjust_pos_weight",
             "new_max": 10.0,
@@ -1120,70 +1075,11 @@ def _generate_tuning_directives(
             "type": "adjust_estimators",
             "new_n_estimators": 1200,
         })
-        # 同时剔除方向错误因子 (Level 2 前置)
-        if wrong_direction_factors:
-            actions.append({
-                "type": "drop_factors",
-                "factors": wrong_direction_factors,
-                "reason": "这些因子在漏选大牛股上方向相反 (norm_diff>1.5)",
-            })
-            reasons.append(f"剔除 {len(wrong_direction_factors)} 个方向错误因子: "
-                          f"{', '.join(wrong_direction_factors[:5])}")
-        reasons.append("调参 + 因子剔除: 提升正样本权重, 移除误导因子")
+        reasons.append("漏选大牛股在训练集中有正样本但模型给低分, 提升正样本权重")
 
-    elif diagnosis == "label_gap" and current_drop_factors and current_model == "lgbm":
-        # 第二次 label_gap (已调参+剔因子仍失败): 换模型
-        actions.append({
-            "type": "switch_model",
-            "new_model": "xgboost",
-            "reason": "LightGBM 多轮调参后仍无法学习正样本, 尝试 XGBoost",
-        })
-        # 恢复默认因子 (新模型可能有不同的因子利用方式)
-        if current_drop_factors:
-            actions.append({
-                "type": "restore_factors",
-                "reason": "换模型后恢复全量因子, 让新模型自行筛选",
-            })
-        reasons.append("LightGBM 多轮调参失败 → 换 XGBoost")
-
-    elif diagnosis == "label_gap" and current_model == "xgboost":
-        # 第三次 label_gap (XGBoost 也失败): 换 RF
-        actions.append({
-            "type": "switch_model",
-            "new_model": "random_forest",
-            "reason": "XGBoost 也无法学习, 尝试 RandomForest (不同的特征选择机制)",
-        })
-        reasons.append("XGBoost 也失败 → 换 RandomForest")
-
+    # ── L1: factor_blind → 仅记录, 不换因子/模型 ──
     elif diagnosis == "factor_blind":
-        # 因子盲区: 剔除低效因子 + 标记缺失因子
-        factors_to_drop = list(set(low_importance_factors) & set(wrong_direction_factors))
-        if not factors_to_drop and wrong_direction_factors:
-            factors_to_drop = wrong_direction_factors[:5]
-
-        if factors_to_drop:
-            actions.append({
-                "type": "drop_factors",
-                "factors": factors_to_drop,
-                "reason": "低重要性且方向错误",
-            })
-            reasons.append(f"剔除 {len(factors_to_drop)} 个无效因子")
-
-        missing_factor_hints = []
-        if blind_industries:
-            top_ind = [item["industry"] for item in blind_industries[:5]]
-            missing_factor_hints.append(f"行业动量因子 (漏选行业: {', '.join(top_ind)})")
-        for spot in factor_blind_spots[:3]:
-            if spot["factor"].startswith("volatility") and spot["diff"] > 0:
-                missing_factor_hints.append("趋势强度因子 (大牛股高波动)")
-            if spot["factor"].startswith("mf_big_cumsum") and spot["diff"] < 0:
-                missing_factor_hints.append("主力洗盘识别因子 (大单流出≠利空)")
-
-        actions.append({
-            "type": "flag_factor_gap",
-            "missing_factor_hints": missing_factor_hints,
-        })
-        reasons.append("因子集无法刻画大牛股特征, 需扩充因子")
+        reasons.append("因子集无法刻画大牛股特征 (仅记录, 不自动换因子)")
 
     # ── 通用: AUC 过低 → 增加回看窗口 ──
     for tname, h in health.items():
@@ -1195,144 +1091,25 @@ def _generate_tuning_directives(
             reasons.append(f"{tname} AUC 过低, 扩大训练窗口")
             break
 
-    # ── 通用: 正样本极少 ──
-    for tname in ["200pct", "100pct"]:
-        tmeta = training_meta.get(tname, {})
-        pos_rate = tmeta.get("pos_rate_train", 0)
-        if 0 < pos_rate < 0.003:
-            actions.append({
-                "type": "flag_sparse_positives",
-                "target": tname,
-                "pos_rate": pos_rate,
-                "suggestion": "考虑用区间最大涨幅替代终点涨幅作为标签",
-            })
-            reasons.append(f"{tname} 正样本仅 {pos_rate:.1%}, 考虑放宽标签定义")
-
-    # ── 计算 escalation level ──
-    has_factor_change = any(a["type"] in ("drop_factors", "restore_factors") for a in actions)
-    has_model_switch = any(a["type"] == "switch_model" for a in actions)
-    if has_model_switch:
-        escalation = 3
-    elif has_factor_change:
-        escalation = 2
-    else:
-        escalation = 1
-
+    # ── 重训决策 ──
     retrain_required = (
         diagnosis in ("threshold_issue", "label_gap")
         and miss_rate > 0.8
-    ) or has_factor_change or has_model_switch or tracking_retrain
+    ) or tracking_retrain
 
-    # 回路 B 信号追加原因
     if tracking_retrain:
         reasons.append(f"跟踪反馈: 胜率={tracking_win_rate:.0%} 亏损率={tracking_loss_rate:.0%}")
 
     reason = "; ".join(reasons) if reasons else ""
 
-    # ── 安全限制: 修改类动作不超过 MAX_ACTIONS_PER_DIRECTIVE ──
-    modify_types = {"adjust_pos_weight", "adjust_estimators", "increase_lookback",
-                    "drop_factors", "restore_factors", "switch_model"}
-    modify_actions = [a for a in actions if a["type"] in modify_types]
-    info_actions = [a for a in actions if a["type"] not in modify_types]
-    if len(modify_actions) > MAX_ACTIONS_PER_DIRECTIVE:
-        modify_actions = modify_actions[:MAX_ACTIONS_PER_DIRECTIVE]
-        reasons.append(f"安全限制: 截断为 {MAX_ACTIONS_PER_DIRECTIVE} 个修改动作")
-    actions = modify_actions + info_actions
-
-    # ── 合并 LLM 建议 ──
-    if llm_advice:
-        # LLM 建议剔除的因子 (与规则引擎取并集)
-        llm_drops = llm_advice.get("drop_factors", [])
-        if llm_drops:
-            existing_drop_actions = [a for a in actions if a["type"] == "drop_factors"]
-            if existing_drop_actions:
-                # 合并到已有的 drop_factors action
-                existing_factors = existing_drop_actions[0].get("factors", [])
-                merged = list(set(existing_factors + llm_drops))
-                existing_drop_actions[0]["factors"] = merged
-                existing_drop_actions[0]["reason"] = (
-                    existing_drop_actions[0].get("reason", "") +
-                    "; LLM 建议: " +
-                    ", ".join(f"{f}: {llm_advice.get('drop_reasons', {}).get(f, '')}"
-                             for f in llm_drops[:3])
-                )
-            else:
-                actions.append({
-                    "type": "drop_factors",
-                    "factors": llm_drops,
-                    "reason": "LLM 因子顾问建议剔除",
-                })
-            if not has_factor_change:
-                escalation = max(escalation, 2)
-                has_factor_change = True
-                retrain_required = True
-
-        # LLM 建议换模型
-        llm_model = llm_advice.get("model_suggestion", "keep")
-        if llm_model.startswith("switch_") and not has_model_switch:
-            new_model = llm_model.replace("switch_", "").replace("rf", "random_forest")
-            if new_model != current_model:
-                actions.append({
-                    "type": "switch_model",
-                    "new_model": new_model,
-                    "reason": f"LLM 建议: {llm_advice.get('analysis', '')}",
-                })
-                escalation = 3
-                retrain_required = True
-
-        # LLM 新因子建议 (记录到 actions, 由方案 C 执行)
-        new_factors = llm_advice.get("new_factor_ideas", [])
-        if new_factors:
-            actions.append({
-                "type": "llm_new_factors",
-                "factors": new_factors,
-                "reason": "LLM 因子工程师建议",
-            })
-
-        if llm_advice.get("analysis"):
-            reason = reason + ("; " if reason else "") + f"LLM: {llm_advice['analysis']}"
+    # 安全限制: 最多 3 个修改动作
+    if len(actions) > MAX_ACTIONS_PER_DIRECTIVE:
+        actions = actions[:MAX_ACTIONS_PER_DIRECTIVE]
 
     return {
         "retrain_required": retrain_required,
         "reason": reason,
         "diagnosis": diagnosis,
         "miss_rate": miss_rate,
-        "escalation_level": escalation,
-        "current_model": current_model,
         "actions": actions,
-        "llm_advice": llm_advice if llm_advice else None,
     }
-
-
-def _identify_low_importance_factors(training_meta: dict) -> list[str]:
-    """
-    从训练 meta 中找出低重要性因子: 在所有 target 模型中平均 importance 排名倒数 30%。
-    """
-    factor_scores = {}
-    n_targets = 0
-
-    for tname, tmeta in training_meta.items():
-        if not isinstance(tmeta, dict):
-            continue
-        top_features = tmeta.get("top_features", [])
-        if not top_features:
-            continue
-        n_targets += 1
-        # top_features 是按重要性降序的
-        for rank, feat_info in enumerate(top_features):
-            fname = feat_info.get("name", "")
-            imp = feat_info.get("importance", 0)
-            if fname not in factor_scores:
-                factor_scores[fname] = []
-            factor_scores[fname].append(imp)
-
-    if not factor_scores or n_targets == 0:
-        return []
-
-    # 计算平均重要性
-    avg_imp = {f: sum(vs) / len(vs) for f, vs in factor_scores.items()}
-    sorted_factors = sorted(avg_imp.items(), key=lambda x: x[1])
-
-    # 底部 30%
-    n_low = max(1, len(sorted_factors) * 3 // 10)
-    return [f for f, _ in sorted_factors[:n_low]]

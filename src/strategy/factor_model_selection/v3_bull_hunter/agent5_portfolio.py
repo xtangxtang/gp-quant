@@ -1,16 +1,15 @@
 """
-Bull Hunter v4 — Agent 5: Portfolio Manager (买卖执行 Agent)
+Bull Hunter v6 — Agent 5: Portfolio Manager (买卖执行 Agent)
 
 职责:
-  1. 接收 Agent 3 的 Top 5 候选 → 决策买入 (考虑仓位/资金/已持有)
+  1. 接收 Agent 3 的 Top N 候选 (经 Agent 8 买入质量过滤) → 决策买入
   2. 接收 Agent 6 的卖出权重 → 执行卖出 (sell_weight > 阈值)
   3. 管理组合约束: 最大持仓数、单仓上限、资金分配
-  4. 接收 Agent 7 Supervisor 的调优指令 → 调整买卖参数
 
 交互:
-  Agent 3 → (Top 5 candidates) → Agent 5
+  Agent 3 → (Top N candidates) → Agent 8 → Agent 5
   Agent 6 → (sell_weights)      → Agent 5
-  Agent 7 → (directives)        → Agent 5 (调参: 卖出阈值, 仓位上限)
+  统一复盘 → (directives)        → Agent 5 (调参: 卖出阈值, 止损)
 
 持久化:
   results/bull_hunter/portfolio/  (由 Portfolio 类管理)
@@ -38,8 +37,8 @@ class PortfolioConfig:
     # 止损线: 持仓跌幅超此值强制卖出
     stop_loss_pct: float = -0.15
     # 止盈线: 最大涨幅超此值后回撤一定比例卖出
-    trailing_stop_gain: float = 0.50   # 涨 50% 后开始 trailing stop
-    trailing_stop_pct: float = 0.20    # 从最高点回撤 20% 触发
+    trailing_stop_gain: float = 0.30   # 涨 30% 后开始 trailing stop
+    trailing_stop_pct: float = 0.15    # 从最高点回撤 15% 触发
     # 最大持仓数
     max_positions: int = MAX_POSITIONS
     # 单仓最大资金占比
@@ -48,6 +47,9 @@ class PortfolioConfig:
     min_hold_days: int = 5
     # Agent 3 最低入选概率 (低于此不买)
     min_prob_200: float = 0.10
+    # P1: 行业亏损过滤 — 近 N 天内同行业亏损 >= M 次则跳过
+    industry_loss_lookback_days: int = 60
+    industry_loss_max_count: int = 2
 
 
 def run_portfolio_decisions(
@@ -261,6 +263,31 @@ def _decide_buys(
         logger.info(f"  仓位已满 ({n_current}/{cfg.max_positions}), 不买入")
         return []
 
+    # P1: 构建行业亏损黑名单 (近 N 天同行业亏损 >= M 次)
+    blocked_industries = set()
+    if cfg.industry_loss_max_count > 0:
+        trades = portfolio.get_trades()
+        if not trades.empty and "direction" in trades.columns:
+            sells = trades[trades["direction"] == "sell"].copy()
+            if not sells.empty and "trade_date" in sells.columns:
+                cutoff_idx = max(0, len(calendar) - 1)
+                for ci, cd in enumerate(calendar):
+                    if cd >= current_date:
+                        cutoff_idx = ci
+                        break
+                lookback_start_idx = max(0, cutoff_idx - cfg.industry_loss_lookback_days)
+                lookback_start_date = calendar[lookback_start_idx] if lookback_start_idx < len(calendar) else current_date
+                recent_sells = sells[sells["trade_date"] >= lookback_start_date]
+                if not recent_sells.empty and "pnl_pct" in recent_sells.columns:
+                    losses = recent_sells[recent_sells["pnl_pct"] < 0]
+                    if not losses.empty and "industry" in losses.columns:
+                        industry_loss_counts = losses.groupby("industry").size()
+                        blocked_industries = set(
+                            industry_loss_counts[industry_loss_counts >= cfg.industry_loss_max_count].index
+                        )
+                        if blocked_industries:
+                            logger.info(f"  行业亏损黑名单: {blocked_industries}")
+
     buys = []
     for _, row in candidates.iterrows():
         if len(buys) >= available_slots:
@@ -277,10 +304,16 @@ def _decide_buys(
         if prob_200 < cfg.min_prob_200:
             continue
 
+        # P1: 行业亏损过滤
+        industry = row.get("industry", "")
+        if industry and industry in blocked_industries:
+            logger.info(f"  跳过 {sym} ({industry}): 行业近期亏损过多")
+            continue
+
         buys.append({
             "symbol": sym,
             "name": row.get("name", ""),
-            "industry": row.get("industry", ""),
+            "industry": industry,
             "prob_200": prob_200,
             "prob_100": float(row.get("prob_100", 0)),
             "rank": int(row.get("rank", 0)),

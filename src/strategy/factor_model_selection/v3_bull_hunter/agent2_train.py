@@ -82,6 +82,7 @@ class TrainConfig:
     sample_interval_days: int = 5   # 采样间隔 (每周一次, 增加样本密度)
     val_ratio: float = 0.2          # 验证集比例 (时间末尾)
     max_scale_pos_weight: float = 5.0   # 上限, 避免过高导致loss震荡
+    ewma_halflife_days: int = 90    # P2: EWMA 样本权重半衰期 (天数, 0=不用)
     # LightGBM (v4 回退为默认, V1 回测表现最优)
     n_estimators: int = 800
     max_depth: int = 5
@@ -571,10 +572,28 @@ def _train_one_target(
     if len(X) < 200:
         return None, {}
 
+    # P2: EWMA 样本权重 (近期样本权重更高)
+    sample_weights = None
+    if cfg.ewma_halflife_days > 0 and "sample_date" in panel.columns:
+        sample_dates = panel.loc[valid_mask, "sample_date"].values
+        # 转换为距最新日期的天数差
+        unique_dates = sorted(set(sample_dates))
+        max_date = unique_dates[-1]
+        date_to_idx = {d: i for i, d in enumerate(unique_dates)}
+        max_idx = date_to_idx[max_date]
+        decay = np.log(2) / cfg.ewma_halflife_days
+        raw_weights = np.array([np.exp(-decay * (max_idx - date_to_idx[d]) * cfg.sample_interval_days)
+                                for d in sample_dates])
+        # 归一化到均值 1.0 (不改变有效样本量的数量级)
+        sample_weights = raw_weights / raw_weights.mean()
+        logger.info(f"    EWMA 权重: halflife={cfg.ewma_halflife_days}d, "
+                     f"min={sample_weights.min():.3f}, max={sample_weights.max():.3f}")
+
     # 时间分割: 最后 val_ratio 的样本做验证
     n_val = max(int(len(X) * cfg.val_ratio), 50)
     X_train, X_val = X[:-n_val], X[-n_val:]
     y_train, y_val = y[:-n_val], y[-n_val:]
+    w_train = sample_weights[:-n_val] if sample_weights is not None else None
 
     n_pos_train = int(y_train.sum())
     n_neg_train = len(y_train) - n_pos_train
@@ -613,6 +632,7 @@ def _train_one_target(
         model.fit(
             X_train, y_train,
             eval_set=[(X_val, y_val)],
+            sample_weight=w_train,
             verbose=False,
         )
     elif cfg.model_type == "random_forest":
@@ -627,7 +647,7 @@ def _train_one_target(
             random_state=42,
             n_jobs=cfg.workers,
         )
-        model.fit(X_train, y_train)
+        model.fit(X_train, y_train, sample_weight=w_train)
     else:
         # 默认: LightGBM
         model = lgb.LGBMClassifier(
@@ -649,6 +669,7 @@ def _train_one_target(
             X_train, y_train,
             eval_set=[(X_val, y_val)],
             eval_metric="auc",
+            sample_weight=w_train,
             callbacks=[
                 lgb.log_evaluation(period=200),
             ],

@@ -37,21 +37,33 @@ DAILY_FACTORS = [
     "mf_big_momentum", "mf_big_streak",
     "coherence_l1", "purity_norm", "von_neumann_entropy", "coherence_decay_rate",
     # ── v2: factor_advisor 建议新增的 8 个衍生因子 ──
-    "momentum_20d", "momentum_60d", "price_vs_ma20",
+    "momentum_5d", "momentum_20d", "momentum_60d", "price_vs_ma20",
     "vol_price_synergy", "volatility_ratio", "mf_reversal_zscore",
     "atr_20d", "close_vs_high_60d",
+]
+
+# ── v10: 行业动量/共振因子 (截面聚合, 非缓存) ──
+INDUSTRY_FACTORS = [
+    "industry_mom_5d",         # 行业中位数 5 日涨幅
+    "industry_mom_20d",        # 行业中位数 20 日涨幅
+    "industry_breadth_5d",     # 行业中 5 日正收益比例
+    "industry_rs_20d",         # 行业 20 日相对全市场超额
+    "industry_vol_surge",      # 行业量比中位数
 ]
 
 
 def compute_derived_factors(df: pd.DataFrame) -> pd.DataFrame:
     """
-    从原始 OHLCV + 资金流列计算 8 个新衍生因子。
+    从原始 OHLCV + 资金流列计算 9 个新衍生因子。
 
     需要列: close (必须), high/low/amount/net_mf_amount (可选)。
     在时间序列上计算 rolling 指标, 适用于 agent1 快照提取和 agent2 训练 panel 构建。
     """
     out = df.copy()
     close = out["close"].astype(np.float64)
+
+    # 0. 5日动量 (v10: 供行业因子聚合)
+    out["momentum_5d"] = close.pct_change(5)
 
     # 1. 20日动量
     out["momentum_20d"] = close.pct_change(20)
@@ -103,6 +115,54 @@ def compute_derived_factors(df: pd.DataFrame) -> pd.DataFrame:
         out["close_vs_high_60d"] = np.nan
 
     return out
+
+
+def compute_industry_factors(snap: pd.DataFrame) -> pd.DataFrame:
+    """
+    从全市场截面快照计算行业动量/共振因子 (v10)。
+
+    输入 snap 必须含: _industry, momentum_5d, momentum_20d, vol_ratio_s。
+    返回原 snap 附加 INDUSTRY_FACTORS 列。
+    """
+    if "_industry" not in snap.columns:
+        for col in INDUSTRY_FACTORS:
+            snap[col] = np.nan
+        return snap
+
+    ind = snap["_industry"]
+
+    # 行业 5 日中位数涨幅
+    if "momentum_5d" in snap.columns:
+        grp5 = snap.groupby(ind)["momentum_5d"]
+        snap["industry_mom_5d"] = ind.map(grp5.median())
+        # 行业中 5 日正收益比例
+        snap["industry_breadth_5d"] = ind.map(
+            snap.groupby(ind)["momentum_5d"].apply(lambda x: (x > 0).mean())
+        )
+    else:
+        snap["industry_mom_5d"] = np.nan
+        snap["industry_breadth_5d"] = np.nan
+
+    # 行业 20 日中位数涨幅 + 相对全市场
+    if "momentum_20d" in snap.columns:
+        grp20 = snap.groupby(ind)["momentum_20d"]
+        ind_mom20 = grp20.median()
+        snap["industry_mom_20d"] = ind.map(ind_mom20)
+        market_mom20 = snap["momentum_20d"].median()
+        snap["industry_rs_20d"] = snap["industry_mom_20d"] - market_mom20
+    else:
+        snap["industry_mom_20d"] = np.nan
+        snap["industry_rs_20d"] = np.nan
+
+    # 行业量比中位数
+    if "vol_ratio_s" in snap.columns:
+        snap["industry_vol_surge"] = ind.map(
+            snap.groupby(ind)["vol_ratio_s"].median()
+        )
+    else:
+        snap["industry_vol_surge"] = np.nan
+
+    return snap
 
 
 def preload_factor_cache(
@@ -247,6 +307,9 @@ def run_factor_generation(
         lambda s: basic_info.get(s, {}).get("name", ""))
     daily_snap["_industry"] = daily_snap.index.map(
         lambda s: basic_info.get(s, {}).get("industry", ""))
+
+    # ── v10: 行业动量/共振因子 ──
+    daily_snap = compute_industry_factors(daily_snap)
 
     logger.info(f"Agent 1 完成: {len(daily_snap)} 只股票, scan_date={scan_date}")
     return daily_snap

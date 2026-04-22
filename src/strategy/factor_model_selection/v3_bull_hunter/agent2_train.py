@@ -68,10 +68,13 @@ DAILY_FACTORS = [
     "mf_sm_proportion", "mf_flow_imbalance",
     "mf_big_momentum", "mf_big_streak",
     "coherence_l1", "purity_norm", "von_neumann_entropy", "coherence_decay_rate",
-    # ── v2: factor_advisor 建议新增的 8 个衍生因子 ──
-    "momentum_20d", "momentum_60d", "price_vs_ma20",
+    # ── v2: factor_advisor 建议新增的 9 个衍生因子 ──
+    "momentum_5d", "momentum_20d", "momentum_60d", "price_vs_ma20",
     "vol_price_synergy", "volatility_ratio", "mf_reversal_zscore",
     "atr_20d", "close_vs_high_60d",
+    # ── v10: 行业动量/共振因子 (截面聚合) ──
+    "industry_mom_5d", "industry_mom_20d", "industry_breadth_5d",
+    "industry_rs_20d", "industry_vol_surge",
 ]
 
 
@@ -110,6 +113,7 @@ def run_training(
     cache_dir: str,
     scan_date: str,
     cfg: TrainConfig | None = None,
+    basic_path: str = "",
 ) -> dict[str, dict]:
     """
     训练大牛股分类器 (200pct 主模型 + 100pct 辅助).
@@ -118,6 +122,7 @@ def run_training(
         cache_dir: 特征缓存根目录 (含 daily/ 子目录)
         scan_date: 训练日期 (YYYYMMDD)
         cfg: 训练配置
+        basic_path: 股票基本信息 (tushare_stock_basic.csv), 用于行业因子
 
     Returns:
         {target_name: {"model_path": str, "meta": dict}}
@@ -182,7 +187,8 @@ def run_training(
                 f"{calendar[sample_start_idx]} ~ {calendar[sample_end_idx - 1]}")
 
     # ── 构建训练 panel ──
-    panel = _build_training_panel(cache_dir, calendar, sample_dates, scan_idx)
+    panel = _build_training_panel(cache_dir, calendar, sample_dates, scan_idx,
+                                  basic_path=basic_path)
     if panel.empty:
         logger.error("训练 panel 为空")
         return {}
@@ -431,6 +437,7 @@ def _build_training_panel(
     calendar: list[str],
     sample_dates: list[str],
     scan_idx: int,
+    basic_path: str = "",
 ) -> pd.DataFrame:
     """
     构建训练 panel: 对每个采样日期, 取全市场因子快照 + 计算前瞻涨幅。
@@ -533,6 +540,20 @@ def _build_training_panel(
 
     # 过滤无效行 (close <= 0)
     snapshots = snapshots[snapshots["close"].gt(0) & snapshots["close"].notna()]
+
+    # ── v10: 行业因子 (截面聚合) ──
+    from .agent1_factor import _load_basic_info, compute_industry_factors, INDUSTRY_FACTORS
+    basic_info = _load_basic_info(basic_path)
+    if basic_info:
+        snapshots["_industry"] = snapshots["symbol"].map(
+            lambda s: basic_info.get(s, {}).get("industry", ""))
+        # 按采样日分组计算行业因子 (避免跨日泄漏)
+        parts = []
+        for sd, grp in snapshots.groupby("sample_date"):
+            grp = compute_industry_factors(grp)
+            parts.append(grp)
+        snapshots = pd.concat(parts, axis=0)
+        snapshots.drop(columns=["_industry"], inplace=True, errors="ignore")
 
     # 整理列
     factor_cols = [f for f in DAILY_FACTORS if f in snapshots.columns]

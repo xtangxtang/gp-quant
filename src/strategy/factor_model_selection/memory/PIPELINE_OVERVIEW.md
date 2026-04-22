@@ -84,7 +84,7 @@ scan_interval = max(hold_days, user_scan_interval)
 ```mermaid
 flowchart TB
     subgraph DATA["数据源"]
-        FC["feature-cache/<br/>daily + weekly + 32 因子"]
+        FC["feature-cache/<br/>daily + weekly + 32 因子<br/>(+9 运行时衍生 + 5 行业, v10)"]
         DAILY["tushare-daily-full/<br/>价量数据"]
         MF["tushare-moneyflow/<br/>资金流"]
     end
@@ -192,7 +192,7 @@ Agent 6    snapshot                                      trades    —       参
 
 | Agent | 文件 | 层 | 职责 |
 |-------|------|----|------|
-| **Agent 1** | `agent1_factor.py` | 选股 | 从缓存提取 scan_date 的全市场因子截面 (32 因子) |
+| **Agent 1** | `agent1_factor.py` | 选股 | 从缓存提取 scan_date 的全市场因子截面 (32 缓存 + 9 运行时衍生 + 5 行业 = 46 因子, v10) |
 | **Agent 2** | `agent2_train.py` | 选股 | 构建训练 panel + 训练 3 个 LightGBM 二分类器 (30%/100%/200%) |
 | **Agent 3** | `agent3_predict.py` | 选股 | 全市场概率预测 + A/B/C 分层评级 |
 | **Agent 8** | `agent8_buy_signal.py` | 选股 | 买入质量过滤: 在 Top N 中再做规则+模型双引擎打分 |
@@ -316,4 +316,5 @@ results/bull_hunter/
 **详细文档**:
 - 策略 README: [v3_bull_hunter/README.md](../v3_bull_hunter/README.md)
 - v6 简化记录: [BULL_HUNTER_V6_SIMPLIFICATION_20260421.md](BULL_HUNTER_V6_SIMPLIFICATION_20260421.md)
+- V11-A 行业龙头通道复盘: [BULL_HUNTER_V11A_INDUSTRY_LEADER_BACKTEST_20260422.md](BULL_HUNTER_V11A_INDUSTRY_LEADER_BACKTEST_20260422.md)
 - v4 架构基线: [BULL_HUNTER_V4_ARCHITECTURE_20260420.md](BULL_HUNTER_V4_ARCHITECTURE_20260420.md)

@@ -24,6 +24,7 @@
 4. 合并: 周线因子加 w_ 前缀并入日线截面 (left join on symbol)
 5. 过滤: ST/退市 + 流动性 (近20日均成交额 ≥ 5000万)
 6. 附加元信息: _name, _industry
+7. ✨ v10: 计算行业因子 (按 _industry 分组聚合)
 ```
 
 ## 因子列表
@@ -45,6 +46,35 @@
 | **散户** | `mf_sm_proportion`, `mf_flow_imbalance` | 散户占比、资金失衡 |
 | **资金动量** | `mf_big_momentum`, `mf_big_streak` | 大单动量、连续天数 |
 | **量子相干** | `coherence_l1`, `purity_norm`, `von_neumann_entropy`, `coherence_decay_rate` | 密度矩阵指标 |
+
+### 运行时衍生因子 (9 个, `compute_derived_factors`)
+
+不进入缓存 CSV，加载后在内存中 rolling 计算:
+
+| 因子名 | 说明 |
+|--------|------|
+| `momentum_5d` | ✨ v10 新增: `close.pct_change(5)`, 供行业因子聚合 |
+| `momentum_20d`, `momentum_60d` | 20/60 日动量 |
+| `price_vs_ma20` | 价格相对 20日均线偏离度 |
+| `vol_price_synergy` | 量价协同度 |
+| `volatility_ratio` | 10日/60日波动比 |
+| `mf_reversal_zscore` | 资金流反转Z值 |
+| `atr_20d` | 20日 ATR 振幅/股价 |
+| `close_vs_high_60d` | 当前价/60日最高价 |
+
+### ✨ 行业因子 (5 个, v10 新增, `compute_industry_factors`)
+
+**计算时机**: 构建全市场快照后, 按 `_industry` 分组聚合 (纯截面计算，无未来数据泄漏).
+
+| 因子名 | 公式 | 用途 |
+|--------|------|------|
+| `industry_mom_5d` | 行业 `momentum_5d` 中位数 | 识别行业短期趋势 |
+| `industry_mom_20d` | 行业 `momentum_20d` 中位数 | 行业中期趋势 |
+| `industry_breadth_5d` | 行业内 5日正收益比例 | 行业广度/普涨信号 |
+| `industry_rs_20d` | `industry_mom_20d - market_mom_20d` | 行业超额、相对强度 |
+| `industry_vol_surge` | 行业 `vol_ratio_s` 中位数 | 行业量能入场 |
+
+**动机**: V9 隔过了固态/CPO/存储 8 个板块行情中的 7 只 (中际旭创/新易盛/佰维存储等)。跟踪发现这些股票从未进入 Agent 3 候选，因为模型看不到"该股所在行业最近多强"。
 
 ### 周线因子 (30 个, 合并时加 `w_` 前缀)
 

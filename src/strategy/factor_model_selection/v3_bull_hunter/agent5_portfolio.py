@@ -294,14 +294,19 @@ def _decide_buys(
             break
 
         sym = row["symbol"]
-        prob_200 = float(row.get("prob_200", 0))
+        source = str(row.get("source", "model") or "model")
+        prob_200_raw = row.get("prob_200", 0)
+        try:
+            prob_200 = float(prob_200_raw) if pd.notna(prob_200_raw) else 0.0
+        except (TypeError, ValueError):
+            prob_200 = 0.0
 
         # 跳过已持有
         if sym in held_symbols:
             continue
 
-        # 概率门槛
-        if prob_200 < cfg.min_prob_200:
+        # 概率门槛 (仅模型通道; 行业龙头通道豁免)
+        if source == "model" and prob_200 < cfg.min_prob_200:
             continue
 
         # P1: 行业亏损过滤

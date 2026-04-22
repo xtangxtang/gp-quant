@@ -33,6 +33,11 @@ from .agent4_monitor import run_monitor
 from .agent5_portfolio import PortfolioConfig, run_portfolio_decisions
 from .agent6_exit_signal import ExitSignalConfig, run_exit_signal, train_exit_model, auto_adjust_exit_weights
 from .agent8_buy_signal import BuySignalConfig, run_buy_signal, train_buy_model, auto_adjust_buy_weights
+from .agent9_industry_leader import (
+    IndustryLeaderConfig,
+    run_industry_leader_signal,
+    merge_with_model_predictions,
+)
 from .portfolio import Portfolio
 from .tracker import PredictionTracker
 
@@ -61,6 +66,10 @@ class PipelineConfig:
     market_tightened_stop_pct: float = -0.08  # 收紧后的止损线
     # ── 弱模型门槛 (建议2) ──
     min_model_auc: float = 0.55   # 200pct 模型 AUC 低于此值, 跳过买入
+    # ── V11-A: 行业趋势+龙头独立信号通道 ──
+    enable_industry_leader_channel: bool = True
+    industry_leader_cfg: "IndustryLeaderConfig | None" = None
+    industry_leader_max_total: int = 8   # 模型 + 龙头 合并后最多候选数
 
 
 # ──────────────────────────────────────────────────────────
@@ -200,6 +209,7 @@ def run_train(
         cache_dir=cfg.cache_dir,
         scan_date=scan_date,
         cfg=train_cfg,
+        basic_path=cfg.basic_path,
     )
     if not train_results:
         logger.error("Agent 2 训练失败")
@@ -286,6 +296,7 @@ def run_review(
             cache_dir=cfg.cache_dir,
             scan_date=scan_date,
             cfg=new_train_cfg,
+            basic_path=cfg.basic_path,
         )
 
         if retrain_results:
@@ -354,6 +365,7 @@ def run_scan(
         cache_dir=cfg.cache_dir,
         scan_date=scan_date,
         cfg=train_cfg,
+        basic_path=cfg.basic_path,
     )
     if not train_results:
         logger.error("Agent 2 训练失败, 终止")
@@ -578,9 +590,32 @@ def run_live(
     )
 
     if not predictions.empty:
+        predictions = predictions.copy()
+        predictions["source"] = "model"
         model_date = os.path.basename(os.path.realpath(model_dir))
         tracker.record_predictions(predictions, scan_date, cfg.data_dir, calendar, model_date)
     logger.info(f"  → {len(predictions)} 只 A 级候选")
+
+    # ── Agent 9: 行业趋势 + 龙头独立通道 (V11-A) ──
+    if cfg.enable_industry_leader_channel:
+        logger.info("── Agent 9: 行业龙头独立通道 ──")
+        il_cfg = cfg.industry_leader_cfg or IndustryLeaderConfig()
+        leader_preds = run_industry_leader_signal(
+            factor_snapshot=snapshot,
+            scan_date=scan_date,
+            cfg=il_cfg,
+            recent_predictions=recent,
+        )
+        if not leader_preds.empty:
+            # 合并: 模型 + 龙头, symbol 去重 (优先模型通道)
+            n_model = len(predictions)
+            predictions = merge_with_model_predictions(
+                model_preds=predictions,
+                leader_preds=leader_preds,
+                max_total=cfg.industry_leader_max_total,
+            )
+            n_leaders_added = len(predictions) - n_model
+            logger.info(f"  合并: 模型 {n_model} + 龙头 {n_leaders_added} = {len(predictions)} 只")
 
     # ── Agent 8: 买入时机评估 ──
     logger.info("── Agent 8: 买入时机评估 ──")
@@ -599,12 +634,16 @@ def run_live(
         predictions = predictions[predictions["buy_quality"] >= buy_signal_cfg.min_buy_quality].reset_index(drop=True)
         if n_before > len(predictions):
             logger.info(f"  Agent 8 过滤: {n_before} → {len(predictions)} 只 (min_quality={buy_signal_cfg.min_buy_quality})")
-        # P1: prob_200 硬门槛过滤 (Agent 3 预测概率太低的直接排除)
+        # P1: prob_200 硬门槛过滤 — 仅对模型通道生效, 行业龙头通道豁免
         if "prob_200" in predictions.columns:
+            is_model = predictions.get("source", pd.Series("model", index=predictions.index)) == "model"
+            prob_ok = predictions["prob_200"].fillna(0) >= buy_signal_cfg.min_prob_200
+            keep = (~is_model) | prob_ok
             n_before_p200 = len(predictions)
-            predictions = predictions[predictions["prob_200"] >= buy_signal_cfg.min_prob_200].reset_index(drop=True)
+            predictions = predictions[keep].reset_index(drop=True)
             if n_before_p200 > len(predictions):
-                logger.info(f"  prob_200 过滤: {n_before_p200} → {len(predictions)} 只 (min_prob_200={buy_signal_cfg.min_prob_200})")
+                logger.info(f"  prob_200 过滤 (仅模型通道): {n_before_p200} → {len(predictions)} 只 "
+                            f"(min_prob_200={buy_signal_cfg.min_prob_200})")
 
     # ── Agent 6: 卖出因子评估 ──
     logger.info("── Agent 6: 卖出因子评估 ──")
@@ -621,10 +660,17 @@ def run_live(
 
     # ── Agent 5: 买卖执行 ──
     logger.info("── Agent 5: 组合决策 ──")
-    # 弱模型 / 大盘过滤: 清空买入候选 (允许卖出/止损照常)
+    # 弱模型 / 大盘过滤: 仅清空模型通道候选, 行业龙头通道豁免
     if no_buy_today and not predictions.empty:
-        logger.info(f"  🚫 清空 {len(predictions)} 只买入候选 (弱模型或大盘过滤)")
-        predictions = predictions.iloc[0:0]
+        if "source" in predictions.columns:
+            n_before_gate = len(predictions)
+            predictions = predictions[predictions["source"] == "industry_leader"].reset_index(drop=True)
+            n_cleared = n_before_gate - len(predictions)
+            if n_cleared > 0:
+                logger.info(f"  🚫 清空 {n_cleared} 只模型通道候选 (弱模型或大盘过滤), 保留 {len(predictions)} 只龙头通道")
+        else:
+            logger.info(f"  🚫 清空 {len(predictions)} 只买入候选 (弱模型或大盘过滤)")
+            predictions = predictions.iloc[0:0]
     portfolio_result = run_portfolio_decisions(
         candidates=predictions,
         sell_weights=sell_weights,
@@ -1089,6 +1135,7 @@ def run_live_backtest(
                                     cache_dir=cfg.cache_dir,
                                     scan_date=date,
                                     cfg=new_train_cfg,
+                                    basic_path=cfg.basic_path,
                                 )
                                 if retrain_results:
                                     new_model = get_model_for_date(cfg.cache_dir, date)

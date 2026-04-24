@@ -62,7 +62,7 @@ show_help() {
   echo "示例:"
   echo "  $0 -o /nvme5/xtang/gp-workspace/gp-data"
   echo "  $0 -o /nvme5/xtang/gp-workspace/gp-data --run-now --run-once --dry-run"
-  echo "  nohup $0 -o /nvme5/xtang/gp-workspace/gp-data > /tmp/gp_quant_eod_scheduler.log 2>&1 &"
+  echo "  nohup $0 -o /nvme5/xtang/gp-workspace/gp-data > /nvme5/xtang/gp-workspace/gp-data/scheduler.log 2>&1 &"
 }
 
 while [[ $# -gt 0 ]]; do

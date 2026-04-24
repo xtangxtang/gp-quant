@@ -452,7 +452,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--backfill-open-days", type=int, default=1, help="Open days to refresh in the daily incremental sync")
     parser.add_argument("--financial-threads", type=int, default=16, help="Thread count for financial incremental sync")
     parser.add_argument("--batch-rate", type=int, default=240, help="Tushare batch API rate limit per 60 seconds")
-    parser.add_argument("--financial-rate", type=int, default=360, help="Tushare financial API rate limit per 60 seconds")
+    parser.add_argument("--financial-rate", type=int, default=180, help="Tushare financial API rate limit per 60 seconds")
     parser.add_argument(
         "--financial-datasets",
         default="income,balancesheet,cashflow,fina_indicator",

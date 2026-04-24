@@ -2242,7 +2242,7 @@ APP_HTML = """<!doctype html>
     function logAppend(box, text, cls) {
       const span = document.createElement('span');
       if (cls) span.className = cls;
-      span.textContent = text + '\n';
+      span.textContent = text + '\\n';
       box.appendChild(span);
       box.scrollTop = box.scrollHeight;
     }
@@ -2315,10 +2315,10 @@ APP_HTML = """<!doctype html>
         if (!resp.ok) throw new Error(payload.error || '加载结果失败');
         renderApplyResult(payload);
         status.textContent = '完成';
-        logAppend(logBox, '\n✓ 结果已加载', 'log-done');
+        logAppend(logBox, '\\n✓ 结果已加载', 'log-done');
       } catch (error) {
         status.textContent = error.message || '执行失败';
-        logAppend(logBox, '\n✗ ' + (error.message || '执行失败'), 'log-err');
+        logAppend(logBox, '\\n✗ ' + (error.message || '执行失败'), 'log-err');
       } finally {
         button.disabled = false;
       }

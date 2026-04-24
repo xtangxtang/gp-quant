@@ -57,7 +57,13 @@ FINANCIAL_DATASETS = {
 
 
 class RateLimiter:
+    """Thread-safe sliding window rate limiter with dynamic server-side backoff."""
+
+    RATE_LIMIT_ERROR_MIN = 20
+    RATE_LIMIT_RECOVERY_STEP = 2
+
     def __init__(self, max_calls: int, period: float):
+        self.initial_max = int(max_calls)
         self.max_calls = int(max_calls)
         self.period = float(period)
         self.calls: list[float] = []
@@ -74,6 +80,23 @@ class RateLimiter:
                 now = time.time()
                 self.calls = [t for t in self.calls if now - t < self.period]
             self.calls.append(time.time())
+
+    def reduce_rate(self) -> None:
+        """Halve the rate on server-side rate limit errors, with a floor."""
+        with self.lock:
+            new_max = max(self.max_calls // 2, self.RATE_LIMIT_ERROR_MIN)
+            if new_max != self.max_calls:
+                print(f"[RateLimiter] rate limit error: max_calls {self.max_calls} -> {new_max}")
+            self.max_calls = new_max
+            # Flush stale calls from the window to immediately throttle
+            cutoff = time.time() - self.period
+            self.calls = [t for t in self.calls if t > cutoff]
+
+    def recover_rate(self) -> None:
+        """Gradually increase the rate toward the initial value on sustained success."""
+        with self.lock:
+            if self.max_calls < self.initial_max:
+                self.max_calls = min(self.max_calls + self.RATE_LIMIT_RECOVERY_STEP, self.initial_max)
 
 
 def convert_ts_code_to_symbol(ts_code: str) -> str:
@@ -184,11 +207,18 @@ def fetch_with_retry(pro, limiter: RateLimiter, dataset: str, **params) -> pd.Da
             limiter.wait()
             cleaned = {k: v for k, v in params.items() if v is not None and str(v) != ""}
             df = func(**cleaned)
+            limiter.recover_rate()
             return df if isinstance(df, pd.DataFrame) else pd.DataFrame()
         except Exception as exc:
             message = str(exc)
-            if "每分钟最多访问" in message or "访问过于频繁" in message:
-                sleep_seconds = min(45, 10 + attempt * 5)
+            is_rate_limit = (
+                "频率超限" in message
+                or "每分钟最多访问" in message
+                or "访问过于频繁" in message
+            )
+            if is_rate_limit:
+                limiter.reduce_rate()
+                sleep_seconds = min(60, 15 + attempt * 5)
             else:
                 sleep_seconds = min(20, 2 + attempt * 2)
             print(f"retry dataset={dataset} params={cleaned} attempt={attempt}/{max_retries} sleep={sleep_seconds}s err={message}")
@@ -355,6 +385,7 @@ def update_financial_dataset(
             return symbol, "up-to-date"
 
         if cfg["date_col"] in df.columns:
+            df[cfg["date_col"]] = df[cfg["date_col"]].astype(str)
             df = df.sort_values(cfg["date_col"], ascending=True)
 
         if os.path.exists(path):
@@ -362,6 +393,7 @@ def update_financial_dataset(
                 old = pd.read_csv(path)
                 merged = pd.concat([old, df], ignore_index=True).drop_duplicates()
                 if cfg["date_col"] in merged.columns:
+                    merged[cfg["date_col"]] = merged[cfg["date_col"]].astype(str)
                     merged = merged.sort_values(cfg["date_col"], ascending=True)
                 merged.to_csv(path, index=False)
             except Exception:
@@ -407,7 +439,7 @@ def main() -> None:
     parser.add_argument("--token", required=True, help="Tushare token")
     parser.add_argument("--financial-threads", type=int, default=16, help="Thread count for per-symbol financial sync")
     parser.add_argument("--batch-rate", type=int, default=240, help="Max batch API calls per 60 seconds")
-    parser.add_argument("--financial-rate", type=int, default=360, help="Max financial API calls per 60 seconds")
+    parser.add_argument("--financial-rate", type=int, default=180, help="Max financial API calls per 60 seconds")
     parser.add_argument("--backfill-open-days", type=int, default=0, help="Force-refresh the latest N open trading days across all per-symbol date-based datasets")
     parser.add_argument("--skip-date-based", action="store_true", help="Skip stock_basic, trade_cal, daily_full, adj_factor, stk_limit, suspend_d, and dividend")
     parser.add_argument("--skip-financials", action="store_true", help="Skip per-symbol financial datasets")

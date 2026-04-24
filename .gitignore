@@ -29,3 +29,4 @@ gp-quant/results/multitimeframe_resonance/*
 gp-quant/results/*
 results/*
 logs/*
+scheduler.log

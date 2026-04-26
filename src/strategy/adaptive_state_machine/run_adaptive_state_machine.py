@@ -51,7 +51,7 @@ def setup_logging(verbose: bool = False):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Adaptive State Machine — 4 Agent 自适应状态机策略",
+        description="Adaptive State Machine — 自适应状态机策略",
     )
 
     # 模式
@@ -71,6 +71,10 @@ def main():
     # 其他
     parser.add_argument("--symbols", type=str, help="指定股票列表 (逗号分隔)")
     parser.add_argument("--verbose", "-v", action="store_true", help="详细日志")
+    parser.add_argument("--attention_model", type=str, default="", help="Attention 模型路径")
+    parser.add_argument("--attention_alpha", type=float, default=1.0, help="Attention 权重混合比例 (0=纯IC, 1=纯Attention)")
+    parser.add_argument("--cls_mode", type=str, default="rules", choices=["rules", "model"],
+                        help="状态判定模式: rules=阈值规则 (默认), model=Transformer 分位数回归")
 
     args = parser.parse_args()
     setup_logging(args.verbose)
@@ -102,6 +106,9 @@ def main():
             cache_dir=cache_dir,
             config_dir=config_dir,
             output_dir=output_dir,
+            attention_model_path=args.attention_model,
+            attention_alpha=args.attention_alpha,
+            cls_mode=args.cls_mode,
         )
 
         if result.empty:
@@ -121,6 +128,9 @@ def main():
             cache_dir=cache_dir,
             config_dir=config_dir,
             output_dir=output_dir,
+            attention_model_path=args.attention_model,
+            attention_alpha=args.attention_alpha,
+            cls_mode=args.cls_mode,
         )
 
         if not result:

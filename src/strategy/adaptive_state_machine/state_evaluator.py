@@ -1,13 +1,7 @@
 """
-Agent 3: State Evaluator
+State Evaluator — 状态判定
 
-职责: 用动态权重和阈值判定每只股票的状态
-      替代原 signal_detector.py 的硬编码逻辑
-
-输入: 今日因子 + Agent 2 的权重 + 阈值
-输出: 每只股票的状态 (idle/accumulation/breakout/hold/collapse) + 置信度
-
-频率: 每日
+用动态权重和阈值判定每只股票的状态, 替代原 signal_detector.py 的硬编码逻辑。
 """
 
 from __future__ import annotations
@@ -39,12 +33,13 @@ class StateResult:
     aq_score: float         # [0, 1] 积累质量
     bq_score: float         # [0, 1] 突破质量
     composite_score: float  # 0.4*AQ + 0.6*BQ
+    pred_return: float = 0.0      # 模型预测收益率
+    pred_up_prob: float = 0.5     # 模型预测上涨概率
     details: dict = field(default_factory=dict)
 
 
 class StateEvaluator:
-    """
-    Agent 3: 状态评估器。
+    """状态评估器。
 
     用 AdaptiveConfig 中的动态权重和阈值，
     对全市场股票进行状态判定。
@@ -52,27 +47,34 @@ class StateEvaluator:
 
     def __init__(self, config: Optional[AdaptiveConfig] = None):
         self.config = config or AdaptiveConfig()
-        # 跟踪处于 hold 状态的股票
-        self._hold_state: set[str] = set()
+        # 跟踪处于 hold 状态的股票及其进入时间 {symbol: scan_index}
+        self._hold_state: dict[str, int] = {}
+        # 当前扫描日期索引 (由 evaluate_all 设置)
+        self._current_scan_index: int = 0
+        # hold 超时: 超过 N 个扫描日自动释放
+        self.hold_max_scans: int = 3
 
     def evaluate_all(
         self,
         cross_section: pd.DataFrame,
         daily_data: dict[str, tuple[pd.DataFrame, Optional[pd.DataFrame]]],
         config: Optional[AdaptiveConfig] = None,
+        model_predictions: Optional[dict[str, dict]] = None,
     ) -> list[StateResult]:
         """
         对全市场股票进行状态判定。
 
         Args:
             cross_section: 截面快照 (index=symbol, columns=因子)
-            daily_data: Agent 1 的输出 {symbol: (df_d, df_w)}
+            daily_data: Factor calculation 输出 {symbol: (df_d, df_w)}
             config: 动态配置 (可选, 默认用 self.config)
+            model_predictions: Transformer 模型预测 {symbol: {"pred_return": float, "pred_up_prob": float}}
 
         Returns:
             所有股票的 StateResult 列表
         """
         cfg = config or self.config
+        self._current_scan_index += 1  # 每次调用递增扫描索引
         results = []
 
         for sym in cross_section.index:
@@ -80,7 +82,8 @@ class StateEvaluator:
                 continue
 
             df_d, df_w = daily_data[sym]
-            result = self._evaluate_single(sym, df_d, df_w, cfg)
+            pred = model_predictions.get(sym) if model_predictions else None
+            result = self._evaluate_single(sym, df_d, df_w, cfg, pred)
             results.append(result)
 
         # 统计
@@ -89,7 +92,7 @@ class StateEvaluator:
             state_counts[r.state] = state_counts.get(r.state, 0) + 1
 
         logger.info(
-            f"Agent 3: Evaluated {len(results)} stocks. "
+            f"State evaluator: evaluated {len(results)} stocks. "
             f"State distribution: {state_counts}"
         )
         return results
@@ -100,30 +103,28 @@ class StateEvaluator:
         df_d: pd.DataFrame,
         df_w: Optional[pd.DataFrame],
         cfg: AdaptiveConfig,
+        model_pred: Optional[dict] = None,
     ) -> StateResult:
         """评估单只股票的状态"""
         last = df_d.iloc[-1]
         trade_date = str(last.get("trade_date", ""))
 
-        # 1. 检测 accumulation
-        is_accum, aq = self._check_accumulation(last, cfg)
+        pred_return = model_pred["pred_return"] if model_pred else 0.0
+        pred_up_prob = model_pred["pred_up_prob"] if model_pred else 0.5
 
-        # 2. 检测 breakout (需要近期有 accumulation)
-        is_breakout = False
-        if is_accum:
-            is_breakout, _ = self._check_breakout(last, cfg)
+        # 1. 计算各状态得分（0~1）
+        accum_score, aq = self._check_accumulation(last, cfg)
+        breakout_score = self._check_breakout(last, cfg)  # 独立检测，不依赖 accumulation
+        collapse_score = self._check_collapse(last, cfg)
 
-        # 3. 检测 collapse (对 hold 状态的股票也检测)
-        is_collapse = self._check_collapse(last, cfg)
-
-        # 4. 确定最终状态
+        # 2. 分数竞争决定最终状态
         state = self._resolve_state(
-            symbol, is_accum, is_breakout, is_collapse, cfg,
+            symbol, accum_score, breakout_score, collapse_score, pred_up_prob, cfg,
         )
 
         # 5. 计算置信度
         bq = 0.0
-        if is_breakout or state == StockState.BREAKOUT:
+        if state == StockState.BREAKOUT:
             bq = self._calc_bq(last, cfg)
 
         composite = cfg.aq_bq_weight * aq + (1 - cfg.aq_bq_weight) * bq
@@ -146,6 +147,8 @@ class StateEvaluator:
             aq_score=round(aq, 4),
             bq_score=round(bq, 4),
             composite_score=round(composite, 4),
+            pred_return=round(pred_return, 6),
+            pred_up_prob=round(pred_up_prob, 4),
             details=details,
         )
 
@@ -153,92 +156,109 @@ class StateEvaluator:
         self,
         last_row: pd.Series,
         cfg: AdaptiveConfig,
-    ) -> tuple[bool, float]:
+    ) -> tuple[float, float]:
         """
         判定是否处于 accumulation 状态。
 
         Returns:
-            (is_accumulation, aq_score)
+            (accumulation_score, aq_score)
+            score = 满足条件数 / 总条件数
         """
         t = cfg.thresholds
 
-        # 核心条件
-        conditions = []
+        conditions_passed = 0
+        total_conditions = 0
 
         # perm_entropy_m < threshold
         if "perm_entropy_m" in last_row.index and pd.notna(last_row["perm_entropy_m"]):
-            conditions.append(last_row["perm_entropy_m"] < t.get("perm_entropy_acc", 0.65))
+            total_conditions += 1
+            if last_row["perm_entropy_m"] < t.get("perm_entropy_acc", 0.65):
+                conditions_passed += 1
 
         # path_irrev_m > threshold
         if "path_irrev_m" in last_row.index and pd.notna(last_row["path_irrev_m"]):
-            conditions.append(last_row["path_irrev_m"] > t.get("path_irrev_acc", 0.05))
+            total_conditions += 1
+            if last_row["path_irrev_m"] > t.get("path_irrev_acc", 0.05):
+                conditions_passed += 1
 
         # mf_flow_imbalance > threshold (可选)
         if "mf_flow_imbalance" in last_row.index and pd.notna(last_row["mf_flow_imbalance"]):
-            conditions.append(last_row["mf_flow_imbalance"] > t.get("mf_flow_imbalance_min", 0.3))
+            total_conditions += 1
+            if last_row["mf_flow_imbalance"] > t.get("mf_flow_imbalance_min", 0.3):
+                conditions_passed += 1
 
         # mf_big_streak > threshold (可选)
         if "mf_big_streak" in last_row.index and pd.notna(last_row["mf_big_streak"]):
-            conditions.append(last_row["mf_big_streak"] > t.get("mf_big_streak_min", 3))
+            total_conditions += 1
+            if last_row["mf_big_streak"] > t.get("mf_big_streak_min", 3):
+                conditions_passed += 1
 
-        if len(conditions) < 2:
-            return False, 0.0
+        if total_conditions < 2:
+            return 0.0, 0.0
 
-        # 至少满足 N-1 个条件
-        is_accum = sum(conditions) >= max(2, len(conditions) - 1)
+        score = conditions_passed / total_conditions
 
         # 计算 AQ 分数
         aq = self._calc_aq(last_row, cfg)
 
-        return is_accum, aq
+        return score, aq
 
     def _check_breakout(
         self,
         last_row: pd.Series,
         cfg: AdaptiveConfig,
-    ) -> tuple[bool, float]:
+    ) -> float:
         """
         判定是否处于 breakout 状态。
+        独立检测，不依赖 accumulation。
 
         Returns:
-            (is_breakout, bq_score)
+            breakout_score = 满足条件数 / 总条件数
         """
         t = cfg.thresholds
-        conditions = []
+
+        conditions_passed = 0
+        total_conditions = 0
 
         # dom_eig_m > threshold
         if "dom_eig_m" in last_row.index and pd.notna(last_row["dom_eig_m"]):
-            conditions.append(last_row["dom_eig_m"] > t.get("dom_eig_breakout", 0.85))
+            total_conditions += 1
+            if last_row["dom_eig_m"] > t.get("dom_eig_breakout", 0.85):
+                conditions_passed += 1
 
         # vol_impulse > threshold
         if "vol_impulse" in last_row.index and pd.notna(last_row["vol_impulse"]):
-            conditions.append(last_row["vol_impulse"] > t.get("vol_impulse_breakout", 1.8))
+            total_conditions += 1
+            if last_row["vol_impulse"] > t.get("vol_impulse_breakout", 1.8):
+                conditions_passed += 1
 
         # perm_entropy_m < threshold (有序突破)
         if "perm_entropy_m" in last_row.index and pd.notna(last_row["perm_entropy_m"]):
-            conditions.append(last_row["perm_entropy_m"] < t.get("perm_entropy_breakout_max", 0.75))
+            total_conditions += 1
+            if last_row["perm_entropy_m"] < t.get("perm_entropy_breakout_max", 0.75):
+                conditions_passed += 1
 
         # mf_big_momentum > 0 (可选)
         if "mf_big_momentum" in last_row.index and pd.notna(last_row["mf_big_momentum"]):
-            conditions.append(last_row["mf_big_momentum"] > 0)
+            total_conditions += 1
+            if last_row["mf_big_momentum"] > 0:
+                conditions_passed += 1
 
-        if len(conditions) < 3:
-            return False, 0.0
+        if total_conditions < 2:
+            return 0.0
 
-        is_breakout = sum(conditions) >= len(conditions) - 1
-        bq = self._calc_bq(last_row, cfg)
-
-        return is_breakout, bq
+        return conditions_passed / total_conditions
 
     def _check_collapse(
         self,
         last_row: pd.Series,
         cfg: AdaptiveConfig,
-    ) -> bool:
+    ) -> float:
         """
         判定是否出现 collapse 信号。
 
-        5 个信号中需要 N 个同时触发。
+        Returns:
+            collapse_score = 触发信号数 / 需要数 (capped at 1.0)
         """
         t = cfg.thresholds
         signals = 0
@@ -264,37 +284,67 @@ class StateEvaluator:
                 signals += 1
 
         need_n = int(t.get("collapse_need_n", 3))
-        return signals >= need_n
+        return min(1.0, signals / need_n)
 
     def _resolve_state(
         self,
         symbol: str,
-        is_accum: bool,
-        is_breakout: bool,
-        is_collapse: bool,
+        accum_score: float,
+        breakout_score: float,
+        collapse_score: float,
+        model_up_prob: float,
         cfg: AdaptiveConfig,
     ) -> StockState:
-        """解析最终状态
+        """解析最终状态 — 分数竞争制。
 
-        状态优先级:
-          collapse (最高) → breakout → hold → accumulation → idle
+        规则:
+          1. collapse_score >= 1.0 (全部信号触发) → 直接 COLLAPSE
+          2. breakout_score 最高且 > 0.5 → BREAKOUT (入场)
+          3. 已在持仓中 → 检查超时 → HOLD
+          4. accum_score 最高且 > 0.5 → ACCUMULATION
+          5. 其他 → IDLE
+
+        模型预测校准:
+          - model_up_prob < 0.4: 下调 accum/breakout (模型不看好)
+          - model_up_prob < 0.3 + collapse > 0.5: 放宽 collapse 判定
+          - model_up_prob > 0.6: 上调 accum/breakout (模型看好)
         """
-        # collapse 优先级最高 — 触发则退出
-        if is_collapse:
-            self._hold_state.discard(symbol)
+        scan_idx = self._current_scan_index
+
+        # 模型预测校准
+        adj_accum = accum_score
+        adj_breakout = breakout_score
+        adj_collapse = collapse_score
+
+        if model_up_prob < 0.3 and collapse_score > 0.5:
+            adj_collapse = min(1.0, collapse_score * 1.3)
+        elif model_up_prob < 0.4:
+            adj_accum *= 0.7
+            adj_breakout *= 0.7
+        elif model_up_prob > 0.6:
+            adj_accum = min(1.0, accum_score * 1.1)
+            adj_breakout = min(1.0, breakout_score * 1.1)
+
+        # collapse: 全部信号触发时优先级最高，直接退出
+        if adj_collapse >= 1.0:
+            self._hold_state.pop(symbol, None)
             return StockState.COLLAPSE
 
-        # breakout → 新入场信号
-        if is_breakout:
-            self._hold_state.add(symbol)
+        # breakout: 得分最高且超过阈值时入场
+        if adj_breakout > 0.5 and adj_breakout >= adj_accum:
+            self._hold_state[symbol] = scan_idx
             return StockState.BREAKOUT
 
-        # 已在持仓中 → 维持 hold，不要求 accumulation 持续
+        # 已在持仓中 → 检查超时
         if symbol in self._hold_state:
+            entry_scan = self._hold_state[symbol]
+            if scan_idx - entry_scan >= self.hold_max_scans:
+                self._hold_state.pop(symbol)
+                return StockState.IDLE
             return StockState.HOLD
 
-        # accumulation — 未入场的蓄力状态
-        if is_accum:
+        # accumulation: 得分最高且超过阈值时蓄力
+        if adj_accum > 0.5:
             return StockState.ACCUMULATION
 
         return StockState.IDLE
@@ -302,9 +352,14 @@ class StateEvaluator:
     def _calc_aq(self, last_row: pd.Series, cfg: AdaptiveConfig) -> float:
         """
         计算 Accumulation Quality 分数 [0, 1]。
-        使用动态权重。
+        当 attention_weights 存在时，用 attention 权重替代固定权重。
         """
-        weights = cfg.aq_weights
+        if cfg.attention_weights:
+            weights = self._derive_sub_weights(
+                cfg.attention_weights, AQ_FACTORS,
+            )
+        else:
+            weights = cfg.aq_weights
         score = 0.0
 
         for factor, w in weights.items():
@@ -318,9 +373,14 @@ class StateEvaluator:
     def _calc_bq(self, last_row: pd.Series, cfg: AdaptiveConfig) -> float:
         """
         计算 Breakout Quality 分数 [0, 1]。
-        使用动态权重。
+        当 attention_weights 存在时，用 attention 权重替代固定权重。
         """
-        weights = cfg.bq_weights
+        if cfg.attention_weights:
+            weights = self._derive_sub_weights(
+                cfg.attention_weights, BQ_FACTORS,
+            )
+        else:
+            weights = cfg.bq_weights
         score = 0.0
 
         for factor, w in weights.items():
@@ -330,6 +390,24 @@ class StateEvaluator:
             score += w * self._normalize_factor(factor, val)
 
         return min(1.0, max(0.0, score))
+
+    @staticmethod
+    def _derive_sub_weights(
+        attention_weights: dict[str, float],
+        sub_factors: list[str],
+    ) -> dict[str, float]:
+        """从 attention 权重中提取指定因子的权重并归一化。"""
+        extracted = {}
+        for f in sub_factors:
+            if f in attention_weights:
+                extracted[f] = attention_weights[f]
+            else:
+                extracted[f] = 1.0  # fallback: 未知因子给中性权重
+        total = sum(extracted.values())
+        if total > 0:
+            for f in extracted:
+                extracted[f] /= total
+        return extracted
 
     @staticmethod
     def _normalize_factor(factor: str, value: float) -> float:

@@ -133,7 +133,7 @@ DEFAULT_THRESHOLDS = {
     "entropy_accel_collapse": 0.05,
     "vol_exhaustion_ratio": 0.3,
     "purity_collapse_max": 0.3,
-    "collapse_need_n": 3,   # 5 个信号中需要 N 个
+    "collapse_need_n": 4,   # 4 个信号中需要 N 个
 
     # ── Coherence ──
     "purity_accum_min": 0.6,
@@ -160,7 +160,7 @@ THRESHOLD_SEARCH_RANGES = {
     "perm_entropy_collapse": (0.72, 1.00),
     "path_irrev_collapse": (0.005, 0.02),
     "entropy_accel_collapse": (0.03, 0.08),
-    "collapse_need_n": (2, 4),
+    "collapse_need_n": (3, 4),  # 收紧下限: 最少需要 3 个信号
 }
 
 
@@ -171,22 +171,25 @@ THRESHOLD_SEARCH_RANGES = {
 @dataclass
 class AdaptiveConfig:
     """
-    动态参数配置。Agent 2 更新后持久化到 JSON，
-    Agent 3 / Agent 4 读取使用。
+    动态参数配置。Transformer 模式已取代 weight.py/validator.py。
+    此配置仅用于 rules 模式 (fallback) 和阈值配置。
     """
-    # 因子权重 (初始为均匀权重, Agent 2 更新)
+    # 因子权重 (初始为均匀权重)
     factor_weights: dict = field(default_factory=lambda: {f: 1.0 for f in ALL_FACTORS})
 
-    # 当前阈值 (初始为 DEFAULT_THRESHOLDS, Agent 2 更新)
+    # 当前阈值 (初始为 DEFAULT_THRESHOLDS)
     thresholds: dict = field(default_factory=lambda: dict(DEFAULT_THRESHOLDS))
 
-    # 学习率 (Agent 4 动态调整)
+    # 学习率
     learning_rate: float = 0.1
 
-    # 每因子绩效分 (Agent 4 写入)
+    # 每因子绩效分
     factor_scores: dict = field(default_factory=dict)
 
-    # AQ 内部权重 (6 个 AQ 因子, Agent 2 更新)
+    # Attention 动态权重 (覆盖全量因子, 用于 state_evaluator 打分)
+    attention_weights: dict = field(default_factory=dict)
+
+    # AQ 内部权重 (6 个 AQ 因子)
     aq_weights: dict = field(default_factory=lambda: {
         "perm_entropy_m": 0.25,
         "path_irrev_m": 0.20,
@@ -196,7 +199,7 @@ class AdaptiveConfig:
         "mf_flow_imbalance": 0.10,
     })
 
-    # BQ 内部权重 (7 个 BQ 因子, Agent 2 更新)
+    # BQ 内部权重 (7 个 BQ 因子)
     bq_weights: dict = field(default_factory=lambda: {
         "dom_eig_m": 0.20,
         "vol_impulse": 0.20,

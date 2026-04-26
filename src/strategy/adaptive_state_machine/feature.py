@@ -1,13 +1,7 @@
 """
-Agent 1: Factor Calculator
+Factor Calculator — 全市场因子计算
 
-职责: 从 OHLCV + 资金流数据计算全市场 32 个因子
-      复用 entropy_accumulation_breakout 的 feature_engine.py
-
-输入: tushare-daily-full/*.csv + tushare-moneyflow/*.csv
-输出: {symbol: DataFrame_with_features} 截面快照
-
-频率: 每日
+从 OHLCV + 资金流数据计算因子, 复用 entropy_accumulation_breakout 的 feature_engine.py。
 """
 
 from __future__ import annotations
@@ -79,14 +73,14 @@ def _compute_one_symbol(
 
 
 class FactorCalculator:
-    """Agent 1: 全市场因子计算器"""
+    """全市场因子计算器"""
 
     def __init__(
         self,
         daily_dir: str,
         data_root: str = "",
         cache_dir: str = "",
-        max_workers: int = 4,
+        max_workers: int = 28,
     ):
         """
         Args:
@@ -119,7 +113,7 @@ class FactorCalculator:
             csv_files = glob.glob(os.path.join(self.daily_dir, "*.csv"))
             symbols = [os.path.basename(f).replace(".csv", "") for f in csv_files]
 
-        logger.info(f"Agent 1: Computing factors for {len(symbols)} stocks ...")
+        logger.info(f"Factor calculation: computing factors for {len(symbols)} stocks ...")
 
         results = {}
         with ProcessPoolExecutor(max_workers=self.max_workers) as pool:
@@ -140,7 +134,7 @@ class FactorCalculator:
                 if df_d is not None:
                     results[sym] = (df_d, df_w)
 
-        logger.info(f"Agent 1: Done. {len(results)}/{len(symbols)} stocks computed.")
+        logger.info(f"Factor calculation: done. {len(results)}/{len(symbols)} stocks computed.")
         return results
 
     def build_cross_section(
@@ -177,5 +171,5 @@ class FactorCalculator:
             return pd.DataFrame()
 
         df = pd.DataFrame(rows).set_index("symbol")
-        logger.info(f"Agent 1: Cross-section built: {len(df)} stocks × {len(df.columns)} cols")
+        logger.info(f"Cross-section built: {len(df)} stocks × {len(df.columns)} cols")
         return df

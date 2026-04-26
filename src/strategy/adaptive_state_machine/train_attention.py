@@ -244,182 +244,64 @@ def _finalize_samples(X_list, y_reg_list, y_cls_list, w_list):
     return X_std.reshape(X.shape), y_reg, y_cls, w, mean, std
 
 
-def build_cross_sectional_data(
-    daily_dir: str,
-    train_years: list[int],
-    eval_year: int,
-    max_stocks: int = 800,
-    seq_len: int = 60,
-    forward_days: int = 10,
-) -> tuple:
+
+
+def _neutralize_market_cap(
+    X: np.ndarray,
+    factor_names: list[str],
+    market_cap_col: str = "total_mv",
+) -> np.ndarray:
     """
-    Walk-Forward 截面数据构建: 按日期分组。
+    截面市值中性化: 每个时间步, 将每个因子对 log(total_mv) 做截面回归, 取残差。
+
+    Args:
+        X: (n_samples, seq_len, n_factors) 标准化前的原始因子值
+        factor_names: 因子名列表
+        market_cap_col: 市值因子名 (必须在 factor_names 中)
 
     Returns:
-        (train_sections, eval_sections, factor_names, train_mean, train_std)
-        sections = {date_str: {"X": (N, seq_len, n_factors), "y_reg": (N,), "y_cls": (N,)}}
+        X_neutralized: 市值中性化后的因子值 (原始形状)
     """
-    from concurrent.futures import ProcessPoolExecutor, as_completed
+    if market_cap_col not in factor_names:
+        logger.warning(f"Market cap factor '{market_cap_col}' not found, skipping neutralization")
+        return X
 
-    csv_files = glob.glob(os.path.join(daily_dir, "*.csv"))
-    symbols = [os.path.basename(f).replace(".csv", "") for f in csv_files]
+    mc_idx = factor_names.index(market_cap_col)
+    X_copy = X.copy()
+    n_samples, seq_len, n_factors = X.shape
 
-    if len(symbols) > max_stocks:
-        np.random.seed(42)
-        symbols = list(np.random.choice(symbols, max_stocks, replace=False))
-
-    logger.info(f"Computing factors for {len(symbols)} stocks...")
-
-    max_workers = min(28, os.cpu_count() or 4)
-    results = {}
-    with ProcessPoolExecutor(max_workers=max_workers) as pool:
-        futures = {
-            pool.submit(_compute_one_symbol_factors, daily_dir, sym, ""): sym
-            for sym in symbols
-        }
-        for future in as_completed(futures):
-            sym, df = future.result()
-            if not df.empty:
-                results[sym] = df
-
-    logger.info(f"Computed factors for {len(results)}/{len(symbols)} stocks")
-
-    # 全局交易日期
-    all_dates = set()
-    for df in results.values():
-        all_dates.update(df["trade_date"].tolist())
-    trade_dates = sorted(all_dates)
-    date_to_idx = {d: i for i, d in enumerate(trade_dates)}
-
-    # 因子名
-    all_factor_cols = set()
-    for df in results.values():
-        exclude = {"trade_date", "open", "high", "low", "close", "vol", "amount",
-                    "turnover_rate", "net_mf_amount", "symbol"}
-        cols = {c for c in df.columns if c not in exclude}
-        all_factor_cols = all_factor_cols.intersection(cols) if all_factor_cols else cols
-    factor_names = sorted(all_factor_cols)
-    # Filter to only numeric columns (exclude ts_code etc.)
-    sample_df = next(iter(results.values()))
-    numeric_cols = set(sample_df.select_dtypes(include=[np.number]).columns)
-    factor_names = [c for c in factor_names if c in numeric_cols]
-
-    # 按日期分组
-    train_dates_set = {d for d in trade_dates if int(d[:4]) in train_years}
-    eval_dates_set = {d for d in trade_dates if int(d[:4]) == eval_year}
-
-    # 每只股票预计算因子值
-    stock_data = {}
-    for sym, df in results.items():
-        if len(df) < seq_len + forward_days:
-            continue
-        fcols = [c for c in factor_names if c in df.columns]
-        if len(fcols) < 10:
-            continue
-        fvals = df[fcols].select_dtypes(include=[np.number]).values
-        sym_dates = df["trade_date"].tolist()
-        stock_data[sym] = (fvals, sym_dates)
-
-    # 按日期组织截面数据
-    train_sections = {}
-    eval_sections = {}
-
-    current_year = eval_year
-    time_decay_lambda = 0.02
-
-    # 预构建每只股票的 date→index 映射 + close 数组（避免 O(N×M×L) 的 list.index 调用）
-    stock_lookup = {}
-    for sym, (fvals, sym_dates) in stock_data.items():
-        date_to_i = {d: i for i, d in enumerate(sym_dates)}
-        close_arr = results[sym]["close"].values.astype(np.float64)
-        stock_lookup[sym] = (fvals, sym_dates, date_to_i, close_arr)
-
-    logger.info(f"Building cross-sections over {len(trade_dates)} dates...")
-
-    for entry_date in trade_dates:
-        future_idx = date_to_idx.get(entry_date, -1)
-        if future_idx < 0:
-            continue
-        target_idx = future_idx + forward_days
-        if target_idx >= len(trade_dates):
-            continue
-        target_date = trade_dates[target_idx]
-
-        section_X = []
-        section_y_reg = []
-        section_y_cls = []
-        section_weight = []
-
-        year = int(entry_date[:4])
-        weight = np.exp(-time_decay_lambda * (current_year - year) * 365)
-
-        for sym, (fvals, sym_dates, date_to_i, close_arr) in stock_lookup.items():
-            i = date_to_i.get(entry_date)
-            if i is None or i < seq_len:
-                continue
-
-            # 找目标日期在目标股票中的位置
-            target_pos = date_to_i.get(target_date)
-            if target_pos is None:
-                continue
-
-            entry_price = float(close_arr[i])
-            exit_price = float(close_arr[target_pos])
-            if entry_price <= 0 or exit_price <= 0:
-                continue
-            ret = (exit_price - entry_price) / entry_price
-            if abs(ret) > 0.5:
-                continue
-
-            x_seq = fvals[i - seq_len:i]
-            if np.any(np.isnan(x_seq)):
-                continue
-
-            section_X.append(x_seq)
-            section_y_reg.append(ret)
-            section_y_cls.append(1 if ret > 0 else 0)
-            section_weight.append(weight)
-
-        if len(section_X) < 10:
+    # 对每个样本的最后一个时间步 (当前截面) 做中性化
+    for i in range(n_samples):
+        mc_values = X_copy[i, :, mc_idx]  # (seq_len,) 市值时序
+        if np.any(np.isnan(mc_values)):
             continue
 
-        section = {
-            "X": np.array(section_X, dtype=np.float32),
-            "y_reg": np.array(section_y_reg, dtype=np.float32),
-            "y_cls": np.array(section_y_cls, dtype=np.int64),
-            "weight": np.array(section_weight, dtype=np.float32),
-        }
+        for j in range(n_factors):
+            if j == mc_idx:
+                continue
+            factor_ts = X_copy[i, :, j]
+            if np.any(np.isnan(factor_ts)):
+                continue
 
-        if entry_date in train_dates_set:
-            train_sections[entry_date] = section
-        elif entry_date in eval_dates_set:
-            eval_sections[entry_date] = section
+            # 对整个时序做中性化 (回归 log(mc) → factor)
+            log_mc = np.log(np.abs(mc_values) + 1e-6)
+            # 简单 OLS: factor = alpha + beta * log_mc + residual
+            # 用 numpy 做逐时间步的截面中性化
+            mask = ~(np.isnan(factor_ts) | np.isnan(log_mc))
+            if mask.sum() < 5:
+                continue
 
-    if not train_sections:
-        raise ValueError("No valid training sections")
+            X_mc = np.column_stack([np.ones(mask.sum()), log_mc[mask]])
+            y = factor_ts[mask]
+            try:
+                beta = np.linalg.lstsq(X_mc, y, rcond=None)[0]
+                residual = y - X_mc @ beta
+                factor_ts[mask] = residual
+            except np.linalg.LinAlgError:
+                pass
 
-    # 标准化: 用训练集全局 mean/std
-    all_train_X = np.concatenate([s["X"] for s in train_sections.values()], axis=0)
-    from src.strategy.adaptive_state_machine.attention_learner import _standardize_factors
-    _, train_mean, train_std = _standardize_factors(all_train_X.reshape(-1, all_train_X.shape[-1]))
-    logger.info(f"Cross-sectional data: {len(train_sections)} train dates, "
-                f"{len(eval_sections)} eval dates")
-    logger.info(f"  Avg stocks per train date: "
-                f"{np.mean([s['X'].shape[0] for s in train_sections.values()]):.0f}")
-    sys.stdout.flush()
+    return X_copy
 
-    # 应用标准化
-    for date in train_sections:
-        sec = train_sections[date]
-        sec["X"] = (sec["X"] - train_mean) / train_std
-        sec["X"] = np.clip(sec["X"], -5.0, 5.0)
-
-    for date in eval_sections:
-        sec = eval_sections[date]
-        sec["X"] = (sec["X"] - train_mean) / train_std
-        sec["X"] = np.clip(sec["X"], -5.0, 5.0)
-
-    return train_sections, eval_sections, factor_names, train_mean, train_std
 
 
 def build_walk_forward_data(
@@ -429,6 +311,7 @@ def build_walk_forward_data(
     max_stocks: int = 500,
     seq_len: int = 60,
     forward_days: int = 10,
+    neutralize_col: str = "",
 ) -> tuple:
     """
     Walk-Forward 数据构建: 按年份切分训练/评估集。
@@ -552,16 +435,26 @@ def build_walk_forward_data(
     if not train_X:
         raise ValueError("No valid training samples")
 
-    def _finalize(X_list, y_reg_list, y_cls_list, w_list):
+    def _finalize(X_list, y_reg_list, y_cls_list, w_list, factor_names=None, neutralize_col=None):
         X = np.array(X_list, dtype=np.float32)
         y_reg = np.array(y_reg_list, dtype=np.float32)
         y_cls = np.array(y_cls_list, dtype=np.int64)
         w = np.array(w_list, dtype=np.float32)
+
+        # Market cap neutralization (before standardization)
+        if neutralize_col and factor_names and neutralize_col in factor_names:
+            logger.info(f"  Neutralizing against '{neutralize_col}' ...")
+            X = _neutralize_market_cap(X, factor_names, neutralize_col)
+            logger.info(f"  Neutralization done")
+
         X_flat = X.reshape(-1, X.shape[-1])
         X_std, mean, std = _standardize_factors(X_flat)
         return X_std.reshape(X.shape), y_reg, y_cls, w, mean, std
 
-    train_X, train_y_reg, train_y_cls, train_w, train_mean, train_std = _finalize(train_X, train_y_reg, train_y_cls, train_w)
+    train_X, train_y_reg, train_y_cls, train_w, train_mean, train_std = _finalize(
+        train_X, train_y_reg, train_y_cls, train_w,
+        factor_names=factor_names, neutralize_col=neutralize_col,
+    )
 
     logger.info(f"Train: {len(train_X)} samples, Eval: {len(eval_X) if eval_X else 0} samples")
     logger.info(f"  Return stats: mean={train_y_reg.mean():.4f}, std={train_y_reg.std():.4f}")
@@ -571,6 +464,202 @@ def build_walk_forward_data(
         return train_X, train_y_reg, train_y_cls, train_w, eval_X, eval_y_reg, eval_y_cls, eval_w, factor_names, trade_dates, train_mean, train_std
 
     return train_X, train_y_reg, train_y_cls, train_w, None, None, None, None, factor_names, trade_dates, train_mean, train_std
+
+
+
+
+def _build_daily_to_weekly_sequences_multi(
+    daily_dir: str,
+    train_years: list[int],
+    eval_year: int,
+    max_stocks: int = 500,
+    daily_seq_len: int = 60,
+    weekly_seq_len: int = 12,
+    forward_days: int = 10,
+    neutralize_col: str = "",
+) -> tuple:
+    """
+    Multi-scale 数据构建: 日线 + 周线双通道。
+
+    周线聚合: 每 5 个交易日取均值作为一周。
+    日线 60 天 + 周线 12 周 → 双通道输入。
+
+    Returns:
+        (X_daily_train, X_weekly_train, y_reg_train, y_cls_train, w_train,
+         X_daily_eval, X_weekly_eval, y_reg_eval, y_cls_eval, w_eval,
+         None, None, None, factor_names, d_mean, d_std, w_mean, w_std)
+    """
+    from concurrent.futures import ProcessPoolExecutor, as_completed
+
+    csv_files = glob.glob(os.path.join(daily_dir, "*.csv"))
+    symbols = [os.path.basename(f).replace(".csv", "") for f in csv_files]
+
+    if len(symbols) > max_stocks:
+        np.random.seed(42)
+        symbols = list(np.random.choice(symbols, max_stocks, replace=False))
+
+    logger.info(f"Computing factors for {len(symbols)} stocks (multi-scale)...")
+
+    max_workers = min(28, os.cpu_count() or 4)
+    results = {}
+    with ProcessPoolExecutor(max_workers=max_workers) as pool:
+        futures = {
+            pool.submit(_compute_one_symbol_factors, daily_dir, sym, ""): sym
+            for sym in symbols
+        }
+        for future in as_completed(futures):
+            sym, df = future.result()
+            if not df.empty:
+                results[sym] = df
+
+    logger.info(f"Computed factors for {len(results)}/{len(symbols)} stocks")
+
+    # 全局交易日期
+    all_dates = set()
+    for df in results.values():
+        all_dates.update(df["trade_date"].tolist())
+    trade_dates = sorted(all_dates)
+    date_to_idx = {d: i for i, d in enumerate(trade_dates)}
+
+    # 因子名
+    all_factor_cols = set()
+    for df in results.values():
+        exclude = {"trade_date", "open", "high", "low", "close", "vol", "amount",
+                    "turnover_rate", "net_mf_amount", "symbol"}
+        cols = {c for c in df.columns if c not in exclude}
+        all_factor_cols = all_factor_cols.intersection(cols) if all_factor_cols else cols
+    factor_names = sorted(all_factor_cols)
+    sample_df = next(iter(results.values()))
+    numeric_cols = set(sample_df.select_dtypes(include=[np.number]).columns)
+    factor_names = [c for c in factor_names if c in numeric_cols]
+
+    train_years_set = set(train_years)
+    current_year = eval_year
+    time_decay_lambda = 0.02
+
+    train_daily_X, train_weekly_X, train_y_reg, train_y_cls, train_w = [], [], [], [], []
+    eval_daily_X, eval_weekly_X, eval_y_reg, eval_y_cls, eval_w = [], [], [], [], []
+
+    # 预计算查找表和 close 数组
+    stock_lookup = {}
+    for sym, df in results.items():
+        if len(df) < daily_seq_len + forward_days:
+            continue
+        fvals = df[factor_names].select_dtypes(include=[np.number]).values
+        sym_dates = df["trade_date"].tolist()
+        if len(fvals) < daily_seq_len + forward_days:
+            continue
+        date_to_i = {d: i for i, d in enumerate(sym_dates)}
+        close_arr = df["close"].values.astype(np.float64)
+        stock_lookup[sym] = (fvals, sym_dates, date_to_i, close_arr)
+
+    logger.info(f"Building multi-scale sequences over {len(trade_dates)} dates...")
+
+    for entry_date in trade_dates:
+        yr = int(entry_date[:4])
+        if yr not in train_years_set and yr != eval_year:
+            continue
+
+        future_idx = date_to_idx.get(entry_date, -1)
+        if future_idx < 0:
+            continue
+        target_idx = future_idx + forward_days
+        if target_idx >= len(trade_dates):
+            continue
+        target_date = trade_dates[target_idx]
+
+        weight = np.exp(-time_decay_lambda * (current_year - yr) * 365)
+
+        daily_seqs, weekly_seqs, y_regs, y_clss = [], [], [], []
+
+        for sym, (fvals, sym_dates, date_to_i, close_arr) in stock_lookup.items():
+            i = date_to_i.get(entry_date)
+            if i is None or i < daily_seq_len:
+                continue
+            target_pos = date_to_i.get(target_date)
+            if target_pos is None:
+                continue
+
+            entry_price = float(close_arr[i])
+            exit_price = float(close_arr[target_pos])
+            if entry_price <= 0 or exit_price <= 0:
+                continue
+            ret = (exit_price - entry_price) / entry_price
+            if abs(ret) > 0.5:
+                continue
+
+            x_daily = fvals[i - daily_seq_len:i]
+            if np.any(np.isnan(x_daily)):
+                continue
+
+            # 周线聚合: 从日线序列中每 5 天取均值
+            x_weekly = []
+            valid = True
+            for w in range(weekly_seq_len):
+                start = i - (weekly_seq_len - w) * 5
+                end = i - (weekly_seq_len - w - 1) * 5
+                if start < 0 or end > i:
+                    valid = False
+                    break
+                week_slice = fvals[start:end]
+                if np.any(np.isnan(week_slice)):
+                    valid = False
+                    break
+                x_weekly.append(np.nanmean(week_slice, axis=0))
+
+            if not valid:
+                continue
+
+            daily_seqs.append(x_daily)
+            weekly_seqs.append(np.array(x_weekly, dtype=np.float32))
+            y_regs.append(ret)
+            y_clss.append(1 if ret > 0 else 0)
+
+        if len(daily_seqs) < 10:
+            continue
+
+        if yr in train_years_set:
+            train_daily_X.extend(daily_seqs)
+            train_weekly_X.extend(weekly_seqs)
+            train_y_reg.extend(y_regs)
+            train_y_cls.extend(y_clss)
+            train_w.extend([weight] * len(daily_seqs))
+        elif yr == eval_year:
+            eval_daily_X.extend(daily_seqs)
+            eval_weekly_X.extend(weekly_seqs)
+            eval_y_reg.extend(y_regs)
+            eval_y_cls.extend(y_clss)
+            eval_w.extend([weight] * len(daily_seqs))
+
+    def _finalize_ms(Xd_list, Xw_list, y_reg_list, y_cls_list, w_list):
+        X_daily = np.array(Xd_list, dtype=np.float32)
+        X_weekly = np.array(Xw_list, dtype=np.float32)
+        y_reg = np.array(y_reg_list, dtype=np.float32)
+        y_cls = np.array(y_cls_list, dtype=np.int64)
+        w = np.array(w_list, dtype=np.float32)
+
+        from src.strategy.adaptive_state_machine.attention_learner import _standardize_factors
+        Xd_flat = X_daily.reshape(-1, X_daily.shape[-1])
+        Xd_std, d_mean, d_std = _standardize_factors(Xd_flat)
+        X_daily = Xd_std.reshape(X_daily.shape)
+
+        Xw_flat = X_weekly.reshape(-1, X_weekly.shape[-1])
+        Xw_std, w_mean, w_std = _standardize_factors(Xw_flat)
+        X_weekly = Xw_std.reshape(X_weekly.shape)
+
+        return X_daily, X_weekly, y_reg, y_cls, w, d_mean, d_std, w_mean, w_std
+
+    if train_daily_X:
+        train_res = _finalize_ms(train_daily_X, train_weekly_X, train_y_reg, train_y_cls, train_w)
+    else:
+        train_res = (None,) * 9
+
+    if eval_daily_X:
+        eval_res = _finalize_ms(eval_daily_X, eval_weekly_X, eval_y_reg, eval_y_cls, eval_w)
+    else:
+        eval_res = (None,) * 9
+
+    return (*train_res, *eval_res, factor_names)
 
 
 def main():
@@ -592,11 +681,10 @@ def main():
     parser.add_argument("--eval-year", type=int, default=2026, help="Evaluation year")
 
     # Phase 2.1: 正则化 (defaults reverted to Phase 1 levels)
-    parser.add_argument("--cross-sectional", action="store_true", help="Enable cross-sectional encoder")
     parser.add_argument("--dropout", type=float, default=0.1, help="Dropout rate (Phase 1: 0.1)")
     parser.add_argument("--weight-decay", type=float, default=0.0001, help="Weight decay (Phase 1: 1e-4)")
-    parser.add_argument("--stock-dropout", type=float, default=0.05, help="Stock dropout ratio per cross-section")
-    parser.add_argument("--label-smoothing", type=float, default=0.0, help="Label smoothing for classification")
+    parser.add_argument("--neutralize", type=str, default="", help="Market cap neutralization column (e.g. total_mv)")
+    parser.add_argument("--multi-scale", action="store_true", help="Use multi-scale (daily+weekly) model")
 
     args = parser.parse_args()
 
@@ -611,112 +699,125 @@ def main():
         device=args.device,
         dropout=args.dropout,
         weight_decay=args.weight_decay,
-        cross_sectional=args.cross_sectional,
-        stock_dropout=args.stock_dropout,
-        label_smoothing=args.label_smoothing,
     )
 
     if args.walk_forward:
-        # Walk-Forward 模式
         train_years = [int(y) for y in args.train_years.split(",")] if args.train_years else [2024, 2025]
         logger.info(f"Walk-Forward mode: train={train_years}, eval={args.eval_year}")
 
-        if args.cross_sectional:
-            # 截面模式
-            logger.info("Cross-Sectional mode: enabled")
-            data = build_cross_sectional_data(
+        # 固定随机种子，确保可复现
+        import torch as _seed_torch
+        _seed_torch.manual_seed(42)
+        np.random.seed(42)
+
+        neutralize_col = args.neutralize if args.neutralize else ""
+
+        if args.multi_scale:
+            # Multi-scale mode
+            logger.info("Multi-scale mode: daily + weekly")
+            data = _build_daily_to_weekly_sequences_multi(
                 args.data_dir,
                 train_years=train_years,
                 eval_year=args.eval_year,
                 max_stocks=args.max_stocks,
-                seq_len=args.seq_len,
+                daily_seq_len=args.seq_len,
+                weekly_seq_len=12,
+                neutralize_col=neutralize_col,
             )
-            train_sections, eval_sections, factor_names, train_mean, train_std = data
+
+            X_daily_train, X_weekly_train, y_reg_train, y_cls_train, w_train = data[0], data[1], data[2], data[3], data[4]
+            X_daily_eval, X_weekly_eval, y_reg_eval, y_cls_eval, w_eval = data[9], data[10], data[11], data[12], data[13]
+            factor_names = data[18]
+            train_mean, train_std = data[14], data[15]
+            weekly_mean, weekly_std = data[16], data[17]
+
+            from src.strategy.adaptive_state_machine.attention_learner import (
+                MultiScaleAttentionModel,
+            )
 
             config.factor_names = factor_names
 
             trainer = AttentionTrainer(config)
-            model = trainer.train_cross_sectional(
-                train_sections, eval_sections,
+            model = trainer.train_multi_scale(
+                X_daily_train, X_weekly_train, y_reg_train, y_cls_train, w_train,
                 save_path=args.model_path,
                 standardize_mean=train_mean, standardize_std=train_std,
+                weekly_mean=weekly_mean, weekly_std=weekly_std,
             )
 
-            # 评估
-            if eval_sections:
-                logger.info("Evaluating on walk-forward holdout...")
+            # Eval
+            if X_daily_eval is not None and len(X_daily_eval) > 0:
+                logger.info("Evaluating multi-scale model on holdout...")
                 trainer.model.eval_mode()
-                all_pred_reg = []
-                all_pred_cls = []
-                all_y_reg = []
-                all_y_cls = []
-                for date in sorted(eval_sections.keys()):
-                    sec = eval_sections[date]
-                    X_e = sec["X"]
-                    import torch as _eval_torch
-                    with _eval_torch.no_grad():
-                        # Phase 2.1 fix: use cross-sectional forward path when model has CS encoder
-                        has_cs = hasattr(trainer.model, 'cross_sectional_transformer')
-                        if has_cs:
-                            out = trainer.model.forward_cross_sectional(X_e, training=False)
-                        else:
-                            out = trainer.model.forward(X_e, training=False)
-                    all_pred_reg.append(out["regression"])
-                    all_pred_cls.append(out["classification"])
-                    all_y_reg.append(sec["y_reg"])
-                    all_y_cls.append(sec["y_cls"])
-                pred_reg = np.concatenate(all_pred_reg)
+                all_pred_reg, all_pred_cls = [], []
+                eval_batch_size = 512
+                import torch as _eval_torch
+                with _eval_torch.no_grad():
+                    for bs in range(0, len(X_daily_eval), eval_batch_size):
+                        be = min(bs + eval_batch_size, len(X_daily_eval))
+                        out = trainer.model.forward(
+                            X_daily_eval[bs:be], X_weekly_eval[bs:be], training=False
+                        )
+                        all_pred_reg.append(out["regression"])
+                        all_pred_cls.append(out["classification"])
+                pred_reg = np.concatenate(all_pred_reg).flatten()
                 pred_cls = np.concatenate(all_pred_cls)
-                y_reg_eval = np.concatenate(all_y_reg)
-                y_cls_eval = np.concatenate(all_y_cls)
-                corr = np.corrcoef(pred_reg, y_reg_eval)[0, 1]
+                from scipy.stats import spearmanr
+                pearson_ic = np.corrcoef(pred_reg, y_reg_eval)[0, 1]
+                spearman_ic, _ = spearmanr(pred_reg, y_reg_eval)
                 acc = (np.argmax(pred_cls, axis=1) == y_cls_eval).mean()
-                logger.info(f"  Eval IC (Pearson): {corr:.4f}")
+                logger.info(f"  Eval IC (Pearson): {pearson_ic:.4f}")
+                logger.info(f"  Eval IC (Spearman): {spearman_ic:.4f}")
                 logger.info(f"  Eval direction accuracy: {acc:.1%}")
+            return  # Multi-scale done
         else:
-            # 非截面模式 (Phase 1 兼容)
+            # Standard single-scale
             data = build_walk_forward_data(
                 args.data_dir,
                 train_years=train_years,
                 eval_year=args.eval_year,
                 max_stocks=args.max_stocks,
                 seq_len=args.seq_len,
+                neutralize_col=neutralize_col,
             )
 
-            X_train, y_reg_train, y_cls_train, w_train = data[0], data[1], data[2], data[3]
-            X_eval, y_reg_eval, y_cls_eval, w_eval = data[4], data[5], data[6], data[7]
-            factor_names = data[8]
-            train_mean, train_std = data[10], data[11]
+        X_train, y_reg_train, y_cls_train, w_train = data[0], data[1], data[2], data[3]
+        X_eval, y_reg_eval, y_cls_eval, w_eval = data[4], data[5], data[6], data[7]
+        factor_names = data[8]
+        train_mean, train_std = data[10], data[11]
 
-            config.factor_names = factor_names
+        config.factor_names = factor_names
 
-            trainer = AttentionTrainer(config)
-            model = trainer.train(
-                X_train, y_reg_train, y_cls_train, w_train,
-                save_path=args.model_path,
-                standardize_mean=train_mean, standardize_std=train_std,
-            )
+        trainer = AttentionTrainer(config)
+        model = trainer.train(
+            X_train, y_reg_train, y_cls_train, w_train,
+            save_path=args.model_path,
+            standardize_mean=train_mean, standardize_std=train_std,
+        )
 
-            # 评估 (分 batch 避免 OOM)
-            if X_eval is not None and len(X_eval) > 0:
-                logger.info("Evaluating on walk-forward holdout...")
-                trainer.model.eval_mode()
-                all_pred_reg = []
-                all_pred_cls = []
-                eval_batch_size = 512
-                import torch as _eval_torch
-                with _eval_torch.no_grad():
-                    for bs in range(0, len(X_eval), eval_batch_size):
-                        be = min(bs + eval_batch_size, len(X_eval))
-                        out = trainer.model.forward(X_eval[bs:be], training=False)
-                        all_pred_reg.append(out["regression"])
-                        all_pred_cls.append(out["classification"])
-                pred_reg = np.concatenate(all_pred_reg)
-                pred_cls = np.concatenate(all_pred_cls)
-                corr = np.corrcoef(pred_reg, y_reg_eval)[0, 1]
-                acc = (np.argmax(pred_cls, axis=1) == y_cls_eval).mean()
-                logger.info(f"  Eval IC (Pearson): {corr:.4f}")
-                logger.info(f"  Eval direction accuracy: {acc:.1%}")
+        # 评估
+        if X_eval is not None and len(X_eval) > 0:
+            logger.info("Evaluating on walk-forward holdout...")
+            trainer.model.eval_mode()
+            all_pred_reg = []
+            all_pred_cls = []
+            eval_batch_size = 512
+            import torch as _eval_torch
+            with _eval_torch.no_grad():
+                for bs in range(0, len(X_eval), eval_batch_size):
+                    be = min(bs + eval_batch_size, len(X_eval))
+                    out = trainer.model.forward(X_eval[bs:be], training=False)
+                    all_pred_reg.append(out["regression"])
+                    all_pred_cls.append(out["classification"])
+            pred_reg = np.concatenate(all_pred_reg)
+            pred_cls = np.concatenate(all_pred_cls)
+            from scipy.stats import spearmanr
+            pearson_ic = np.corrcoef(pred_reg, y_reg_eval)[0, 1]
+            spearman_ic, _ = spearmanr(pred_reg, y_reg_eval)
+            acc = (np.argmax(pred_cls, axis=1) == y_cls_eval).mean()
+            logger.info(f"  Eval IC (Pearson): {pearson_ic:.4f}")
+            logger.info(f"  Eval IC (Spearman): {spearman_ic:.4f}")
+            logger.info(f"  Eval direction accuracy: {acc:.1%}")
 
     else:
         # 全量训练模式

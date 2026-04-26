@@ -54,6 +54,15 @@ SUM_COLS = [
 def process_file(filepath):
     """处理单个股票的日线文件，生成周线。"""
     try:
+        # Skip if weekly already exists and is newer than the daily source
+        basename = os.path.basename(filepath)
+        out_path = os.path.join(OUT_DIR, basename)
+        if (
+            os.path.exists(out_path)
+            and os.path.getmtime(out_path) >= os.path.getmtime(filepath)
+        ):
+            return filepath, 0, None
+
         full_cols = [
             "ts_code", "trade_date", "open", "high", "low", "close", "pre_close",
             "change", "pct_chg", "vol", "amount", "circ_mv", "dv_ratio", "dv_ttm",

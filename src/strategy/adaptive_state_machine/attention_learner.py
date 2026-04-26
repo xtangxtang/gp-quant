@@ -134,38 +134,6 @@ def _standardize_factors(values: np.ndarray) -> np.ndarray:
 
 
 # ═════════════════════════════════════════════════════════
-# Cross-Sectional Encoder (Phase 2)
-# ═════════════════════════════════════════════════════════
-
-class CrossSectionalEncoder(_torch.nn.Module if _torch is not None else object):
-    """截面编码器：stocks 互相 attend。
-    输入: (1, N_stocks, d_model) → 输出: (1, N_stocks, d_model)
-    每只 stock 作为 token，互相交换截面信息。
-    """
-
-    def __init__(self, d_model=128, n_heads=8, n_layers=2, dropout=0.2):
-        torch = _import_torch()
-        super().__init__()
-        encoder_layer = torch.nn.TransformerEncoderLayer(
-            d_model=d_model,
-            nhead=n_heads,
-            dim_feedforward=d_model * 2,
-            dropout=dropout,
-            batch_first=True,
-            activation="gelu",
-        )
-        self.transformer = torch.nn.TransformerEncoder(
-            encoder_layer, num_layers=n_layers,
-        )
-        # 通用可学习位置编码（不依赖 stock 数量）
-        self.pos_encoding = torch.nn.Parameter(torch.randn(1, 1, d_model) * 0.02)
-
-    def forward(self, x):
-        # x: (1, N_stocks, d_model)
-        return self.transformer(x + self.pos_encoding)
-
-
-# ═════════════════════════════════════════════════════════
 # PyTorch 模型定义
 # ═════════════════════════════════════════════════════════
 
@@ -196,30 +164,10 @@ class FactorAttentionModel(_torch.nn.Module if _torch is not None else object):
         self.n_layers = n_layers
         self.dropout = dropout
         self.n_quantiles = n_quantiles
-        self._factor_names = factor_names or []
+        self._factor_names = list(factor_names) if factor_names is not None else []
 
-        # 因子分组嵌入: 每组独立 Linear(group_size → d_group) → concat → Linear(sum(d_group) → d_model)
-        # 根据实际 factor_names 动态构建分组（只包含数据中存在的因子）
-        d_group = 16  # 每组嵌入维度
-        self._factor_to_group = {}  # factor_name → group_name
-        self._active_groups = {}  # group_name → [factor_names_in_data]
-
-        for gname, factors in sorted(FACTOR_GROUPS.items()):
-            present = [f for f in factors if f in self._factor_names]
-            if present:
-                self._active_groups[gname] = present
-                for f in present:
-                    self._factor_to_group[f] = gname
-
-        self.group_names = sorted(self._active_groups.keys())
-        self.group_embeddings = torch.nn.ModuleDict()
-        for gname in self.group_names:
-            n_g = len(self._active_groups[gname])
-            self.group_embeddings[gname] = torch.nn.Linear(n_g, d_group)
-
-        # 融合层: 所有组嵌入拼接后投影到 d_model
-        concat_dim = d_group * len(self.group_names)
-        self.fusion = torch.nn.Linear(concat_dim, d_model)
+        # 因子嵌入: 简单 Linear(n_factors → d_model)
+        self.embedding = torch.nn.Linear(n_factors, d_model)
 
         # 可学习位置编码
         self.pos_encoding = torch.nn.Parameter(
@@ -275,31 +223,12 @@ class FactorAttentionModel(_torch.nn.Module if _torch is not None else object):
         # 因子重要性投影
         self.factor_proj = torch.nn.Linear(d_model, n_factors)
 
-        # Phase 2: 截面编码器
-        self.cross_sectional_transformer = CrossSectionalEncoder(
-            d_model=d_model, n_heads=n_heads, n_layers=2, dropout=dropout,
-        )
-
-    def _group_embed(self, x: np.ndarray, training: bool = False) -> "torch.Tensor":
-        """分组因子嵌入: (batch, seq_len, n_factors) → (batch, seq_len, d_model)"""
+    def _embed(self, x: np.ndarray) -> "torch.Tensor":
+        """因子嵌入: (batch, seq_len, n_factors) → (batch, seq_len, d_model)"""
         import torch
-        # 向后兼容: 旧模型使用单 embedding 层
-        if getattr(self, "_use_old_embedding", False):
-            x_tensor = torch.from_numpy(x.astype(np.float32))
-            return self.embedding(x_tensor)
-        x_tensor = torch.from_numpy(x.astype(np.float32))
-        factor_to_idx = {name: i for i, name in enumerate(self._factor_names)}
-        group_reps = []
-        for gname in self.group_names:
-            cols = [factor_to_idx[f] for f in self._active_groups[gname]]
-            if cols:
-                x_g = x_tensor[:, :, cols]
-                group_reps.append(self.group_embeddings[gname](x_g))
-            else:
-                batch, seq = x_tensor.shape[0], x_tensor.shape[1]
-                group_reps.append(torch.zeros(batch, seq, 16, device=x_tensor.device))
-        h = torch.cat(group_reps, dim=-1)
-        return self.fusion(h)
+        device = next(self.embedding.parameters()).device
+        x_tensor = torch.from_numpy(x.astype(np.float32)).to(device)
+        return self.embedding(x_tensor)
 
     def forward(self, x: np.ndarray, training: bool = False) -> dict:
         """前向传播。
@@ -315,7 +244,7 @@ class FactorAttentionModel(_torch.nn.Module if _torch is not None else object):
         x_tensor = torch.from_numpy(x.astype(np.float32))
 
         # 嵌入 + 位置编码
-        h = self._group_embed(x) + self.pos_encoding
+        h = self._embed(x) + self.pos_encoding
 
         # 拼接 summary token
         batch_size = h.shape[0]
@@ -346,7 +275,7 @@ class FactorAttentionModel(_torch.nn.Module if _torch is not None else object):
     def forward_tensors(self, x: np.ndarray) -> dict:
         """前向传播，返回原始 tensor（用于训练时的 loss 计算）"""
         import torch
-        h = self._group_embed(x) + self.pos_encoding
+        h = self._embed(x) + self.pos_encoding
 
         batch_size = h.shape[0]
         summary = self.summary_token.expand(batch_size, -1, -1)
@@ -378,77 +307,18 @@ class FactorAttentionModel(_torch.nn.Module if _torch is not None else object):
     def _temporal_encode(self, x_tensor) -> "torch.Tensor":
         """时序编码: (N, seq_len, n_factors) → (N, d_model) summary tokens"""
         import torch
-        # 向后兼容: 旧模型使用单 embedding 层
-        if getattr(self, "_use_old_embedding", False):
-            h = self.embedding(x_tensor) + self.pos_encoding
-        else:
-            factor_to_idx = {name: i for i, name in enumerate(self._factor_names)}
-            group_reps = []
-            for gname in self.group_names:
-                cols = [factor_to_idx[f] for f in self._active_groups[gname]]
-                if cols:
-                    x_g = x_tensor[:, :, cols]
-                    group_reps.append(self.group_embeddings[gname](x_g))
-                else:
-                    batch, seq = x_tensor.shape[0], x_tensor.shape[1]
-                    group_reps.append(torch.zeros(batch, seq, 16, device=x_tensor.device))
-            h = torch.cat(group_reps, dim=-1)
-            h = self.fusion(h) + self.pos_encoding
+        h = self.embedding(x_tensor) + self.pos_encoding
         batch_size = h.shape[0]
         summary = self.summary_token.expand(batch_size, -1, -1)
         h = torch.cat([summary, h], dim=1)
         encoder_output = self.transformer(h)
         return encoder_output[:, 0, :]  # (N, d_model)
 
-    def forward_cross_sectional(self, x: np.ndarray, training: bool = False) -> dict:
-        """截面推理: (N_stocks, seq_len, n_factors) → 截面融合后的预测"""
-        import torch
-        x_tensor = torch.from_numpy(x.astype(np.float32))
-        if not training:
-            with torch.no_grad():
-                return self._forward_cs_tensors(x_tensor)
-        return self._forward_cs_tensors(x_tensor)
-
-    def forward_tensors_cross_sectional(self, x: np.ndarray) -> dict:
-        """截面推理，返回原始 tensor（训练 loss 计算用）"""
-        import torch
-        x_tensor = torch.from_numpy(x.astype(np.float32))
-        return self._forward_cs_tensors(x_tensor)
-
-    def _forward_cs_tensors(self, x_tensor) -> dict:
-        """截面推理核心逻辑"""
-        import torch
-        N = x_tensor.shape[0]
-
-        # 1. Temporal: 每只 stock 独立编码
-        stock_embeddings = self._temporal_encode(x_tensor)  # (N, d_model)
-
-        # 2. Cross-Sectional: stocks 互相 attend
-        cs_input = stock_embeddings.unsqueeze(0)  # (1, N, d_model)
-        cs_output = self.cross_sectional_transformer(cs_input)  # (1, N, d_model)
-        cs_output = cs_output.squeeze(0)  # (N, d_model)
-
-        # 3. Residual: 截面输出 + 时序输出
-        final = stock_embeddings + cs_output  # (N, d_model)
-
-        # 4. Multi-task heads
-        regression = self.regression_head(final).squeeze(-1)
-        classification = self.classification_head(final)
-        quantiles = self._monotone_quantiles(final)
-        factor_importance = self.factor_proj(final)
-
-        return {
-            "regression": regression,
-            "classification": classification,
-            "quantiles": quantiles,
-            "factor_importance": factor_importance,
-        }
-
     def get_attention_weights(self, x: np.ndarray) -> np.ndarray:
         """提取 attention weights 作为因子重要性。"""
         import torch
         x_tensor = torch.from_numpy(x.astype(np.float32))
-        h = self._group_embed(x) + self.pos_encoding
+        h = self._embed(x) + self.pos_encoding
 
         batch_size = h.shape[0]
         summary = self.summary_token.expand(batch_size, -1, -1)
@@ -495,7 +365,6 @@ class FactorAttentionModel(_torch.nn.Module if _torch is not None else object):
             "n_heads": self.n_heads,
             "n_layers": self.n_layers,
             "n_quantiles": self.n_quantiles,
-            "has_cross_sectional": True,
             "factor_names": self._factor_names,
         }
         if standardize_mean is not None:
@@ -506,38 +375,274 @@ class FactorAttentionModel(_torch.nn.Module if _torch is not None else object):
         logger.info(f"Attention model saved to {path}")
 
     def load(self, path: str):
-        """加载模型（支持向后兼容：旧模型使用单 embedding 层）"""
+        """加载模型"""
         import torch
         if not os.path.exists(path):
             logger.warning(f"Model file not found: {path}, using random init")
             return False
         state = torch.load(path, weights_only=False, map_location="cpu")
         sd = state.get("model_state_dict", {})
-
-        # 检测旧模型（有 embedding.weight 但无 group_embeddings）
-        has_old_embedding = "embedding.weight" in sd
-        has_group_embed = any(k.startswith("group_embeddings") for k in sd)
-
-        if has_old_embedding and not has_group_embed:
-            # 旧模型: 创建兼容的 embedding 层
-            n_f = state.get("n_factors", self.n_factors)
-            self.embedding = torch.nn.Linear(n_f, self.d_model)
-            try:
-                self.load_state_dict(sd, strict=False)
-            except Exception as e:
-                logger.warning(f"Partial state dict load: {e}")
-                self.load_state_dict(sd, strict=False)
-            # 替换 forward 路径使用旧 embedding
-            self._use_old_embedding = True
-        else:
-            self._use_old_embedding = False
-            try:
-                self.load_state_dict(sd, strict=False)
-            except Exception as e:
-                logger.warning(f"Partial state dict load: {e}")
-                self.load_state_dict(sd, strict=False)
+        try:
+            self.load_state_dict(sd, strict=False)
+        except Exception as e:
+            logger.warning(f"Partial state dict load: {e}")
+            self.load_state_dict(sd, strict=False)
 
         logger.info(f"Attention model loaded from {path}")
+        return True
+
+
+# ═════════════════════════════════════════════════════════
+# PatchTST 价格编码器 (Feature 3)
+# ═════════════════════════════════════════════════════════
+
+class PatchTSTEncoder(_torch.nn.Module if _torch is not None else object):
+    """PatchTST 风格的 OHLCV 编码器。
+
+    将原始价格序列分割为 patches, 用 Transformer 编码。
+    输入: (batch, seq_len, 5) → (batch, d_patch)
+    5 个通道: open, high, low, close, volume (标准化后)
+    """
+
+    def __init__(self, seq_len=60, patch_len=10, stride=5, d_model=128, dropout=0.1):
+        torch = _import_torch()
+        super().__init__()
+        self.seq_len = seq_len
+        self.patch_len = patch_len
+        self.stride = stride
+        self.n_patches = (seq_len - patch_len) // stride + 1
+
+        # Patch embedding: 每个 patch 展平后投影
+        self.patch_embed = torch.nn.Linear(patch_len * 5, d_model)
+        self.pos_embed = torch.nn.Parameter(torch.randn(1, self.n_patches + 1, d_model) * 0.02)
+        self.cls_token = torch.nn.Parameter(torch.randn(1, 1, d_model) * 0.02)
+
+        encoder_layer = torch.nn.TransformerEncoderLayer(
+            d_model=d_model, nhead=8, dim_feedforward=d_model * 2,
+            dropout=dropout, batch_first=True, activation="gelu",
+        )
+        self.transformer = torch.nn.TransformerEncoder(encoder_layer, num_layers=2)
+
+    def forward(self, x):
+        """x: (batch, seq_len, 5) → (batch, d_model)"""
+        torch = _import_torch()
+        batch = x.shape[0]
+
+        # 构建 patches: (batch, n_patches, patch_len * 5)
+        patches = []
+        for i in range(self.n_patches):
+            start = i * self.stride
+            end = start + self.patch_len
+            patch = x[:, start:end, :].reshape(batch, -1)
+            patches.append(patch)
+        x_patches = torch.stack(patches, dim=1)  # (batch, n_patches, patch_len*5)
+
+        h = self.patch_embed(x_patches)  # (batch, n_patches, d_model)
+        cls = self.cls_token.expand(batch, -1, -1)
+        h = torch.cat([cls, h], dim=1) + self.pos_embed
+        h = self.transformer(h)
+        return h[:, 0, :]  # CLS token output
+
+
+# ═════════════════════════════════════════════════════════
+# Multi-Scale Attention Model (Feature 2)
+# ═════════════════════════════════════════════════════════
+
+class MultiScaleAttentionModel(_torch.nn.Module if _torch is not None else object):
+    """双通道注意力模型: 日线 + 周线。
+
+    日线通道: (batch, 60, n_factors) → Transformer
+    周线通道: (batch, 12, n_factors) → Transformer
+    输出: concat(summary_daily, summary_weekly) → 预测头
+    """
+
+    def __init__(
+        self,
+        n_factors: int = 32,
+        daily_seq_len: int = 60,
+        weekly_seq_len: int = 12,
+        d_model: int = 128,
+        n_heads: int = 8,
+        n_layers: int = 4,
+        dropout: float = 0.1,
+        n_quantiles: int = N_QUANTILES,
+        factor_names: list[str] | None = None,
+    ):
+        torch = _import_torch()
+        super().__init__()
+
+        self.n_factors = n_factors
+        self.daily_seq_len = daily_seq_len
+        self.weekly_seq_len = weekly_seq_len
+        self.d_model = d_model
+        self.n_heads = n_heads
+        self.n_layers = n_layers
+        self.dropout = dropout
+        self.n_quantiles = n_quantiles
+        self._factor_names = list(factor_names) if factor_names is not None else []
+
+        # 共享嵌入权重 (因子相同)
+        self.embedding = torch.nn.Linear(n_factors, d_model)
+
+        # 日线 Transformer
+        self.daily_pos = torch.nn.Parameter(torch.randn(1, daily_seq_len, d_model) * 0.02)
+        self.daily_summary = torch.nn.Parameter(torch.randn(1, 1, d_model) * 0.02)
+        daily_layer = torch.nn.TransformerEncoderLayer(
+            d_model=d_model, nhead=n_heads, dim_feedforward=d_model * 2,
+            dropout=dropout, batch_first=True, activation="gelu",
+        )
+        self.daily_transformer = torch.nn.TransformerEncoder(daily_layer, num_layers=n_layers)
+
+        # 周线 Transformer
+        self.weekly_pos = torch.nn.Parameter(torch.randn(1, weekly_seq_len, d_model) * 0.02)
+        self.weekly_summary = torch.nn.Parameter(torch.randn(1, 1, d_model) * 0.02)
+        weekly_layer = torch.nn.TransformerEncoderLayer(
+            d_model=d_model, nhead=n_heads, dim_feedforward=d_model * 2,
+            dropout=dropout, batch_first=True, activation="gelu",
+        )
+        self.weekly_transformer = torch.nn.TransformerEncoder(weekly_layer, num_layers=n_layers)
+
+        # 融合层: concat(daily_summary, weekly_summary) → d_model
+        self.fusion = torch.nn.Sequential(
+            torch.nn.Linear(d_model * 2, d_model),
+            torch.nn.GELU(),
+            torch.nn.Dropout(dropout),
+        )
+
+        # 预测头 (与 FactorAttentionModel 相同)
+        self.regression_head = torch.nn.Sequential(
+            torch.nn.Linear(d_model, 32), torch.nn.GELU(),
+            torch.nn.Dropout(dropout), torch.nn.Linear(32, 1),
+        )
+        self.classification_head = torch.nn.Sequential(
+            torch.nn.Linear(d_model, 32), torch.nn.GELU(),
+            torch.nn.Dropout(dropout), torch.nn.Linear(32, 2),
+        )
+        self.quantile_base_head = torch.nn.Sequential(
+            torch.nn.Linear(d_model, 64), torch.nn.GELU(),
+            torch.nn.Dropout(dropout), torch.nn.Linear(64, 1),
+        )
+        self.quantile_delta_head = torch.nn.Sequential(
+            torch.nn.Linear(d_model, 64), torch.nn.GELU(),
+            torch.nn.Dropout(dropout), torch.nn.Linear(64, n_quantiles - 1),
+        )
+        self.factor_proj = torch.nn.Linear(d_model, n_factors)
+
+    def _encode_daily(self, x_daily) -> "torch.Tensor":
+        torch = _import_torch()
+        if isinstance(x_daily, np.ndarray):
+            x_daily = torch.from_numpy(x_daily.astype(np.float32)).to(self.embedding.weight.device)
+        h = self.embedding(x_daily) + self.daily_pos
+        batch = h.shape[0]
+        summary = self.daily_summary.expand(batch, -1, -1)
+        h = torch.cat([summary, h], dim=1)
+        out = self.daily_transformer(h)
+        return out[:, 0, :]
+
+    def _encode_weekly(self, x_weekly) -> "torch.Tensor":
+        torch = _import_torch()
+        if isinstance(x_weekly, np.ndarray):
+            x_weekly = torch.from_numpy(x_weekly.astype(np.float32)).to(self.embedding.weight.device)
+        h = self.embedding(x_weekly) + self.weekly_pos
+        batch = h.shape[0]
+        summary = self.weekly_summary.expand(batch, -1, -1)
+        h = torch.cat([summary, h], dim=1)
+        out = self.weekly_transformer(h)
+        return out[:, 0, :]
+
+    def _monotone_quantiles(self, summary_out) -> "torch.Tensor":
+        torch = _import_torch()
+        base = self.quantile_base_head(summary_out)
+        deltas = torch.nn.functional.softplus(self.quantile_delta_head(summary_out))
+        cumulative = torch.cumsum(deltas, dim=1)
+        return torch.cat([base, base + cumulative], dim=1)
+
+    def forward(self, x_daily: np.ndarray, x_weekly: np.ndarray, training: bool = False) -> dict:
+        torch = _import_torch()
+        device = self.embedding.weight.device
+        x_d = torch.from_numpy(x_daily.astype(np.float32)).to(device)
+        x_w = torch.from_numpy(x_weekly.astype(np.float32)).to(device)
+
+        daily_sum = self._encode_daily(x_d)
+        weekly_sum = self._encode_weekly(x_w)
+        fused = self.fusion(torch.cat([daily_sum, weekly_sum], dim=1))
+
+        regression = self.regression_head(fused).squeeze(-1)
+        classification = self.classification_head(fused)
+        quantiles = self._monotone_quantiles(fused)
+        factor_importance = self.factor_proj(fused)
+
+        return {
+            "regression": regression.detach().cpu().numpy(),
+            "classification": classification.detach().cpu().numpy(),
+            "quantiles": quantiles.detach().cpu().numpy(),
+            "factor_importance": factor_importance.detach().cpu().numpy(),
+        }
+
+    def forward_tensors(self, x_daily: np.ndarray, x_weekly: np.ndarray) -> dict:
+        torch = _import_torch()
+        device = self.embedding.weight.device
+        x_d = torch.from_numpy(x_daily.astype(np.float32)).to(device)
+        x_w = torch.from_numpy(x_weekly.astype(np.float32)).to(device)
+
+        daily_sum = self._encode_daily(x_d)
+        weekly_sum = self._encode_weekly(x_w)
+        fused = self.fusion(torch.cat([daily_sum, weekly_sum], dim=1))
+
+        return {
+            "regression": self.regression_head(fused).squeeze(-1),
+            "classification": self.classification_head(fused),
+            "quantiles": self._monotone_quantiles(fused),
+            "factor_importance": self.factor_proj(fused),
+        }
+
+    def train_mode(self):
+        self.train()
+
+    def eval_mode(self):
+        self.eval()
+
+    def parameters(self, recurse=True):
+        return list(super().parameters(recurse=recurse))
+
+    def save(self, path: str, standardize_mean: np.ndarray = None,
+             standardize_std: np.ndarray = None,
+             weekly_mean: np.ndarray = None, weekly_std: np.ndarray = None):
+        torch = _import_torch()
+        state = {
+            "model_state_dict": self.state_dict(),
+            "n_factors": self.n_factors,
+            "daily_seq_len": self.daily_seq_len,
+            "weekly_seq_len": self.weekly_seq_len,
+            "d_model": self.d_model,
+            "n_heads": self.n_heads,
+            "n_layers": self.n_layers,
+            "n_quantiles": self.n_quantiles,
+            "factor_names": self._factor_names,
+            "model_type": "multi_scale",
+        }
+        if standardize_mean is not None:
+            state["standardize_mean"] = standardize_mean
+            state["standardize_std"] = standardize_std
+        if weekly_mean is not None:
+            state["weekly_mean"] = weekly_mean
+            state["weekly_std"] = weekly_std
+        torch.save(state, path)
+        logger.info(f"Multi-scale model saved to {path}")
+
+    def load(self, path: str):
+        torch = _import_torch()
+        if not os.path.exists(path):
+            logger.warning(f"Model file not found: {path}")
+            return False
+        state = torch.load(path, weights_only=False, map_location="cpu")
+        sd = state.get("model_state_dict", {})
+        try:
+            self.load_state_dict(sd, strict=False)
+        except Exception as e:
+            logger.warning(f"Partial state dict load: {e}")
+            self.load_state_dict(sd, strict=False)
+        logger.info(f"Multi-scale model loaded from {path}")
         return True
 
 
@@ -613,10 +718,7 @@ class TrainConfig:
     early_stop_patience: int = 5
     device: str = "cpu"         # 默认 CPU
     # Phase 2: 正则化
-    cross_sectional: bool = False   # 是否启用截面编码器
     weight_decay: float = 1e-4      # Phase 2.1: back to Phase 1
-    stock_dropout: float = 0.05      # Phase 2.1: minimal (was 0.2)
-    label_smoothing: float = 0       # Phase 2.1: back to Phase 1
     # 因子名列表 (用于分组嵌入)
     factor_names: list[str] | None = None
 
@@ -710,7 +812,7 @@ class AttentionTrainer:
                      f"ic={config.ic_weight}")
 
         mse_loss = nn.MSELoss(reduction="none")
-        ce_loss = nn.CrossEntropyLoss(reduction="none", label_smoothing=config.label_smoothing)
+        ce_loss = nn.CrossEntropyLoss(reduction="none", label_smoothing=0.0)
 
         best_val_loss = float("inf")
         patience_counter = 0
@@ -921,7 +1023,7 @@ class AttentionTrainer:
                      f"ic={config.ic_weight}")
 
         mse_loss = nn.MSELoss(reduction="none")
-        ce_loss = nn.CrossEntropyLoss(reduction="none", label_smoothing=config.label_smoothing)
+        ce_loss = nn.CrossEntropyLoss(reduction="none", label_smoothing=0.0)
 
         best_val_loss = float("inf")
         patience_counter = 0
@@ -1080,6 +1182,210 @@ class AttentionTrainer:
 # Attention Learner — 扫描时推理
 # ═════════════════════════════════════════════════════════
 
+
+    def train_multi_scale(
+        self,
+        X_daily: np.ndarray,
+        X_weekly: np.ndarray,
+        y_reg: np.ndarray,
+        y_cls: np.ndarray,
+        sample_weights: np.ndarray,
+        save_path: str = None,
+        standardize_mean: np.ndarray = None,
+        standardize_std: np.ndarray = None,
+        weekly_mean: np.ndarray = None,
+        weekly_std: np.ndarray = None,
+    ):
+        """
+        训练 Multi-Scale 模型 (日线 + 周线双通道)。
+
+        Args:
+            X_daily: (n_samples, daily_seq_len, n_factors)
+            X_weekly: (n_samples, weekly_seq_len, n_factors)
+            y_reg: (n_samples,) 未来收益率
+            y_cls: (n_samples,) 涨跌标签
+            sample_weights: (n_samples,) 时间衰减权重
+        """
+        torch = _import_torch()
+        nn = torch.nn
+        config = self.config
+        device = config.device
+
+        # 初始化 MultiScaleAttentionModel
+        self.model = MultiScaleAttentionModel(
+            n_factors=X_daily.shape[-1],
+            daily_seq_len=X_daily.shape[1],
+            weekly_seq_len=X_weekly.shape[1],
+            d_model=config.d_model,
+            n_heads=config.n_heads,
+            n_layers=config.n_layers,
+            dropout=config.dropout,
+            factor_names=config.factor_names,
+        )
+        self.model.to(device)
+        self.model.train_mode()
+
+        optimizer = torch.optim.AdamW(
+            self.model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay
+        )
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=config.n_epochs, eta_min=1e-5
+        )
+
+        # 划分训练/验证
+        n = len(X_daily)
+        n_val = int(n * config.val_split)
+        indices = np.random.permutation(n)
+        val_idx = indices[:n_val]
+        train_idx = indices[n_val:]
+
+        Xd_train = X_daily[train_idx]
+        Xw_train = X_weekly[train_idx]
+        y_reg_train = y_reg[train_idx]
+        y_cls_train = y_cls[train_idx]
+        w_train = sample_weights[train_idx]
+
+        Xd_val = X_daily[val_idx]
+        Xw_val = X_weekly[val_idx]
+        y_reg_val = y_reg[val_idx]
+        y_cls_val = y_cls[val_idx]
+        w_val = sample_weights[val_idx]
+
+        logger.info(f"Multi-scale training: {len(train_idx)} train, {len(val_idx)} val samples")
+        logger.info(f"  Daily: {Xd_train.shape}, Weekly: {Xw_train.shape}")
+        logger.info(f"  Model params: {sum(p.numel() for p in self.model.parameters()):,}")
+
+        mse_loss = nn.MSELoss(reduction="none")
+        ce_loss = nn.CrossEntropyLoss(reduction="none")
+
+        best_val_loss = float("inf")
+        patience_counter = 0
+        batch_size = config.batch_size
+
+        for epoch in range(config.n_epochs):
+            epoch_start = time.time()
+
+            perm = np.random.permutation(len(Xd_train))
+            total_loss = 0.0
+            n_batches = 0
+
+            for start in range(0, len(Xd_train), batch_size):
+                batch_idx = perm[start:start + batch_size]
+                if len(batch_idx) < 8:
+                    continue
+
+                xd_batch = Xd_train[batch_idx]
+                xw_batch = Xw_train[batch_idx]
+                y_reg_batch = y_reg_train[batch_idx]
+                y_cls_batch = y_cls_train[batch_idx]
+                w_batch = w_train[batch_idx]
+
+                output = self.model.forward_tensors(xd_batch, xw_batch)
+
+                w_tensor = torch.from_numpy(w_batch).to(device)
+
+                pred_reg = output["regression"]
+                reg_loss = (mse_loss(pred_reg, torch.from_numpy(y_reg_batch).float().to(device)) * w_tensor).mean()
+
+                pred_cls = output["classification"]
+                cls_loss = (ce_loss(pred_cls, torch.from_numpy(y_cls_batch).to(device)) * w_tensor).mean()
+
+                pred_quantiles = output["quantiles"]
+                y_reg_tensor = torch.from_numpy(y_reg_batch).float().to(device)
+                quantile_loss_val = torch.tensor(0.0, device=device)
+                for q_idx, tau in enumerate(QUANTILE_LEVELS):
+                    q_pred = pred_quantiles[:, q_idx]
+                    quantile_loss_val = quantile_loss_val + _quantile_loss(q_pred, y_reg_tensor, tau)
+                quantile_loss_val = quantile_loss_val / N_QUANTILES
+
+                ic_loss_val = torch.tensor(0.0, device=device)
+                if len(batch_idx) > 10:
+                    spearman_corr = _spearman_correlation(pred_reg, y_reg_tensor)
+                    ic_loss_val = -spearman_corr
+
+                loss = (config.regression_weight * reg_loss +
+                        config.classification_weight * cls_loss +
+                        config.quantile_weight * quantile_loss_val +
+                        config.ic_weight * ic_loss_val)
+
+                optimizer.zero_grad()
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+                optimizer.step()
+
+                total_loss += loss.item()
+                n_batches += 1
+
+            avg_train_loss = total_loss / max(n_batches, 1)
+
+            # Validation
+            self.model.eval_mode()
+            with torch.no_grad():
+                val_output = self.model.forward_tensors(Xd_val, Xw_val)
+                val_pred_reg = val_output["regression"]
+                val_pred_cls = val_output["classification"]
+                val_w = torch.from_numpy(w_val).to(device)
+                y_reg_tensor_val = torch.from_numpy(y_reg_val).float().to(device)
+
+                val_reg_loss = (mse_loss(val_pred_reg, y_reg_tensor_val) * val_w).mean()
+                val_cls_loss = (ce_loss(val_pred_cls, torch.from_numpy(y_cls_val).to(device)) * val_w).mean()
+
+                val_quantile_loss = torch.tensor(0.0, device=device)
+                val_pred_q = val_output["quantiles"]
+                for q_idx, tau in enumerate(QUANTILE_LEVELS):
+                    val_quantile_loss = val_quantile_loss + _quantile_loss(val_pred_q[:, q_idx], y_reg_tensor_val, tau)
+                val_quantile_loss = val_quantile_loss / N_QUANTILES
+
+                val_ic_loss = torch.tensor(0.0, device=device)
+                if len(Xd_val) > 10:
+                    val_ic_loss = -_spearman_correlation(val_pred_reg, y_reg_tensor_val)
+
+                val_loss = (config.regression_weight * val_reg_loss +
+                            config.classification_weight * val_cls_loss +
+                            config.quantile_weight * val_quantile_loss +
+                            config.ic_weight * val_ic_loss)
+
+                val_ic_abs = abs(_spearman_correlation(val_pred_reg, y_reg_tensor_val).item())
+
+            self.model.train_mode()
+            scheduler.step()
+
+            elapsed = time.time() - epoch_start
+            self.train_history.append({
+                "epoch": epoch + 1,
+                "train_loss": avg_train_loss,
+                "val_loss": val_loss.item(),
+                "val_ic": val_ic_abs,
+                "lr": scheduler.get_last_lr()[0],
+            })
+
+            if (epoch + 1) % 5 == 0 or epoch == 0:
+                logger.info(f"  Epoch {epoch+1}/{config.n_epochs}: "
+                            f"train={avg_train_loss:.6f}, val={val_loss.item():.6f}, "
+                            f"val_ic={val_ic_abs:.4f}, "
+                            f"lr={scheduler.get_last_lr()[0]:.6f}, "
+                            f"time={elapsed:.1f}s")
+
+            # Early stopping
+            if val_loss.item() < best_val_loss:
+                best_val_loss = val_loss.item()
+                patience_counter = 0
+            else:
+                patience_counter += 1
+                if patience_counter >= config.early_stop_patience:
+                    logger.info(f"  Early stopping at epoch {epoch+1}")
+                    break
+
+        if save_path:
+            self.model.save(save_path, standardize_mean=standardize_mean,
+                          standardize_std=standardize_std,
+                          weekly_mean=weekly_mean, weekly_std=weekly_std)
+
+        logger.info(f"Multi-scale training done. Best val loss: {best_val_loss:.6f}")
+        return self.model
+
+
+
 class AttentionLearner:
     """动态因子权重提取器。
 
@@ -1188,11 +1494,13 @@ class AttentionLearner:
         else:
             weights = np.ones(self.model.n_factors)
 
-        # 映射到因子名
+        # 映射到因子名: 优先使用模型保存的实际因子名 (避免 FACTOR_COLUMNS 硬编码错位)
         actual_n_factors = self.model.n_factors
-        factor_names = FACTOR_COLUMNS[:actual_n_factors]
-        while len(factor_names) < actual_n_factors:
-            factor_names.append(f"factor_{len(factor_names)}")
+        factor_names = self.model._factor_names if self.model._factor_names else []
+        if len(factor_names) != actual_n_factors:
+            factor_names = list(FACTOR_COLUMNS[:actual_n_factors])
+            while len(factor_names) < actual_n_factors:
+                factor_names.append(f"factor_{len(factor_names)}")
         result = {factor_names[i]: float(weights[i]) for i in range(actual_n_factors)}
 
         logger.info(f"Attention weights extracted: {len(result)} factors, "
@@ -1235,7 +1543,7 @@ class AttentionLearner:
 
         output = self.model.forward(standardized, training=False)
 
-        factor_names = FACTOR_COLUMNS[:self.model.n_factors]
+        factor_names = self.model._factor_names if self.model._factor_names else FACTOR_COLUMNS[:self.model.n_factors]
         importance = output["factor_importance"]
         abs_importance = np.abs(importance.mean(axis=0))
         total = abs_importance.sum()

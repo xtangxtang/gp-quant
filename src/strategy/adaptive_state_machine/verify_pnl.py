@@ -8,7 +8,7 @@ Adaptive State Machine — P&L 验证脚本
 用法:
   .venv/bin/python -m src.strategy.adaptive_state_machine.verify_pnl \
     --signal-dir results/adaptive_state_machine_phase1_backtest_v3 \
-    --data-dir /home/xtang/gp-workspace/gp-data/tushare-daily-full \
+    --data-dir /mnt/nvme2/xtang/gp-workspace/gp-data/tushare-daily-full \
     --top-n 10 \
     --hold-days 10,20
 """
@@ -47,7 +47,7 @@ class Trade:
 
 def load_trade_calendar() -> list[str]:
     """加载交易日历，返回排序后的交易日列表 (YYYYMMDD str)"""
-    cal_path = "/home/xtang/gp-workspace/gp-data/tushare-trade_cal/trade_cal.csv"
+    cal_path = "/mnt/nvme2/xtang/gp-workspace/gp-data/tushare-trade_cal/trade_cal.csv"
     if not os.path.exists(cal_path):
         return []
     df = pd.read_csv(cal_path)
@@ -265,7 +265,7 @@ def analyze_and_print(trades: list[Trade], top_n: int, hold_days: int):
 
     # 逐日计算组合收益（等权持仓平均日收益率）
     daily_cache: dict[str, pd.DataFrame] = {}
-    data_dir = "/home/xtang/gp-workspace/gp-data/tushare-daily-full"
+    data_dir = "/mnt/nvme2/xtang/gp-workspace/gp-data/tushare-daily-full"
 
     equity_curve = [(active_dates[0], 1.0)] if active_dates else []
     equity = 1.0
@@ -455,7 +455,7 @@ def main():
     )
     parser.add_argument(
         "--data-dir",
-        default="/home/xtang/gp-workspace/gp-data/tushare-daily-full",
+        default="/mnt/nvme2/xtang/gp-workspace/gp-data/tushare-daily-full",
         help="tushare 日线数据目录",
     )
     parser.add_argument(

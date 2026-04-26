@@ -352,13 +352,8 @@ class AdaptiveStateMachine:
         n_model_factors = attn_learner.model.n_factors
         sequences = sequences[:, :, :n_model_factors]
 
-        # 推理: 自动检测是否有截面编码器
-        has_cs = hasattr(attn_learner.model, 'cross_sectional_transformer')
         try:
-            if has_cs:
-                output = attn_learner.model.forward_cross_sectional(sequences, training=False)
-            else:
-                output = attn_learner.model.forward(sequences, training=False)
+            output = attn_learner.model.forward(sequences, training=False)
             pred_returns = output["regression"]
             pred_cls = output["classification"]
             pred_quantiles = output["quantiles"]  # (n_stocks, 9)

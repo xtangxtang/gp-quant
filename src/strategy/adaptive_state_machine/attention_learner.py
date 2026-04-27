@@ -51,20 +51,39 @@ except ImportError:
 # ═════════════════════════════════════════════════════════
 
 FACTOR_COLUMNS = [
-    "perm_entropy_m", "path_irrev_m", "dom_eig_m", "vol_impulse",
-    "perm_entropy_s", "perm_entropy_l", "entropy_slope", "entropy_accel",
-    "path_irrev_l", "turnover_entropy_m", "turnover_entropy_l",
-    "volatility_m", "volatility_l", "vol_compression",
-    "bbw", "bbw_pctl", "vol_ratio_s", "vol_shrink",
-    "dom_eig_l",
-    "coherence_l1", "purity_norm", "von_neumann_entropy", "coherence_decay_rate",
+    # 熵 & 不可逆性 (8)
+    "perm_entropy_s", "perm_entropy_m", "perm_entropy_l",
+    "path_irrev_m", "path_irrev_l",
+    "entropy_accel",
+    "turnover_entropy_m", "turnover_entropy_l",
+    # 波动率 (8)
+    "volatility_m", "volatility_l",
+    "vol_compression", "bbw", "bbw_pctl",
+    "vol_ratio_s", "vol_shrink", "vol_impulse",
+    # 特征值 (2)
+    "dom_eig_m", "dom_eig_l",
+    # 相干性 (2)
+    "coherence_l1", "coherence_decay_rate",
+    # 资金流 (12)
     "mf_big_net", "mf_big_net_ratio",
     "mf_big_cumsum_s", "mf_big_cumsum_m", "mf_big_cumsum_l",
     "mf_sm_proportion", "mf_flow_imbalance",
     "mf_big_momentum", "mf_big_streak",
-    "breakout_range",
-    "intraday_perm_entropy", "intraday_path_irrev",
-    "intraday_vol_concentration", "intraday_range_ratio",
+    "mf_cumsum_s", "mf_cumsum_m",
+    "mf_impulse", "net_mf_vol",
+    # 价格 & 量价 (3)
+    "breakout_range", "volume_ratio", "purity",
+    # 估值/市值 (6)
+    "pe", "pe_ttm", "pb", "ps",
+    "dv_ttm", "circ_mv",
+    # 周线独有特征 (5)
+    "w_pe_ttm_pctl", "w_pb_pctl",
+    "w_weekly_big_net_cumsum",
+    "w_weekly_turnover_shrink", "w_weekly_turnover_ma4",
+    # 其他 (5)
+    "turnover_rate_f", "big_net_ratio_ma",
+    "buy_sm_amount", "buy_sm_vol",
+    "entropy_accel",
 ]
 
 # 分位数回归的分位点
@@ -74,52 +93,58 @@ N_QUANTILES = len(QUANTILE_LEVELS)
 # 因子分组: 7 个语义组，每组独立投影后 concat → Linear → d_model
 # 基于 Vision 文档 v2 第 2 项 + 实际 65 个因子名
 FACTOR_GROUPS = {
+    # 熵 & 不可逆性 (8)
     "entropy": [
         "perm_entropy_s", "perm_entropy_m", "perm_entropy_l",
-        "entropy_slope", "entropy_accel",
+        "entropy_accel",
         "path_irrev_m", "path_irrev_l",
         "turnover_entropy_m", "turnover_entropy_l",
     ],
+    # 波动率 (8)
     "volatility": [
         "volatility_m", "volatility_l",
         "vol_compression", "bbw", "bbw_pctl",
         "vol_ratio_s", "vol_shrink", "vol_impulse",
     ],
+    # 特征值 (2)
     "eigenvalue": [
         "dom_eig_m", "dom_eig_l",
     ],
+    # 相干性 (2)
     "coherence": [
-        "coherence_l1", "purity", "purity_norm",
-        "von_neumann_entropy", "coherence_decay_rate",
+        "coherence_l1", "coherence_decay_rate",
     ],
+    # 资金流 — 资金流向 (12)
     "money_flow": [
-        "big_net_ratio", "big_net_ratio_ma",
+        "mf_big_net", "mf_big_net_ratio",
+        "mf_big_cumsum_s", "mf_big_cumsum_m", "mf_big_cumsum_l",
+        "mf_sm_proportion", "mf_flow_imbalance",
+        "mf_big_momentum", "mf_big_streak",
         "mf_cumsum_s", "mf_cumsum_m",
         "mf_impulse", "net_mf_vol",
     ],
-    "price": [
-        "breakout_range", "pct_chg", "change", "volume_ratio",
-    ],
-    "intraday": [
-        "turnover_rate_f",
-    ],
-    # 估值/市值/流动性组 (其他因子)
-    "valuation": [
-        "pe", "pe_ttm", "pb", "ps", "ps_ttm",
-        "dv_ratio", "dv_ttm",
-    ],
-    "capital": [
-        "circ_mv", "total_mv",
-        "float_share", "free_share", "total_share",
-    ],
+    # 资金流 — 订单流 (2)
     "order_flow": [
-        "buy_sm_amount", "buy_sm_vol", "sell_sm_amount", "sell_sm_vol",
-        "buy_md_amount", "buy_md_vol", "sell_md_amount", "sell_md_vol",
-        "buy_lg_amount", "buy_lg_vol", "sell_lg_amount", "sell_lg_vol",
-        "buy_elg_amount", "buy_elg_vol", "sell_elg_amount", "sell_elg_vol",
+        "buy_sm_amount", "buy_sm_vol",
     ],
+    # 价格 & 量价 (3)
+    "price": [
+        "breakout_range", "volume_ratio", "purity",
+    ],
+    # 估值 & 市值 (6)
+    "valuation": [
+        "pe", "pe_ttm", "pb", "ps",
+        "dv_ttm", "circ_mv",
+    ],
+    # 周线独有特征 (5)
+    "weekly": [
+        "w_pe_ttm_pctl", "w_pb_pctl",
+        "w_weekly_big_net_cumsum",
+        "w_weekly_turnover_shrink", "w_weekly_turnover_ma4",
+    ],
+    # 其他 (5)
     "meta": [
-        "pre_close",
+        "turnover_rate_f", "big_net_ratio_ma",
     ],
 }
 

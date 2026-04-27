@@ -35,10 +35,40 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+
+
+# ── 因子去冗余: 基于相关性分析的手动去重 ──
+def _dedup_factors(factor_names: list[str]) -> list[str]:
+    """移除高共线因子、分钟线因子(无数据)、order_flow 原始列。"""
+    remove = {
+        # 高共线: 买/卖镜像 (保留 buy, 去掉 sell)
+        "sell_elg_amount", "sell_elg_vol",
+        "sell_lg_amount", "sell_lg_vol",
+        "sell_md_amount", "sell_md_vol",
+        "sell_sm_amount", "sell_sm_vol",
+        # 高共线: 买档间高度相关 (保留最大档)
+        "buy_elg_amount", "buy_elg_vol",
+        "buy_lg_amount", "buy_lg_vol",
+        "buy_md_amount", "buy_md_vol",
+        # 高共线: 其他
+        "big_net_ratio",         # vs mf_big_net_ratio
+        "ps_ttm",                # vs ps
+        "purity_norm",           # vs purity
+        "von_neumann_entropy",   # vs purity
+        "entropy_slope",         # vs perm_entropy_s
+        "dv_ratio",              # vs dv_ttm
+        "total_mv",              # vs circ_mv
+        # 分钟线特征 (无 trade/ 目录, 始终 NaN)
+        "intraday_perm_entropy", "intraday_path_irrev",
+        "intraday_vol_concentration", "intraday_range_ratio",
+    }
+    return [c for c in factor_names if c not in remove]
+
 def _compute_one_symbol_factors(
     daily_dir: str,
     symbol: str,
     scan_date: str = "",
+    data_root: str = "",
 ) -> tuple[str, pd.DataFrame]:
     """计算单只股票的因子序列"""
     try:
@@ -68,10 +98,33 @@ def _compute_one_symbol_factors(
         return symbol, pd.DataFrame()
 
     try:
-        result = build_features(df_daily=df, symbol=symbol)
+        # Pass data_root to enable moneyflow + weekly features
+        result = build_features(
+            df_daily=df, symbol=symbol,
+            data_root=data_root,
+        )
         df_featured = result.get("daily")
+        df_weekly = result.get("weekly")
+
         if df_featured is None or len(df_featured) < 80:
             return symbol, pd.DataFrame()
+
+        # ── 追加周线独有特征（截面快照） ──
+        # 取周线特征最后一行，作为静态特征 append 到每一行日线数据
+        # 始终添加这些列（即使 NaN），确保所有股票因子列一致
+        weekly_cols = [
+            "pe_ttm_pctl", "pb_pctl",           # 估值位置
+            "weekly_big_net_cumsum",              # 中期资金趋势
+            "weekly_turnover_shrink", "weekly_turnover_ma4",  # 中期流动性
+        ]
+        for col in weekly_cols:
+            k = f"w_{col}"
+            if df_weekly is not None and not df_weekly.empty and col in df_weekly.columns:
+                val = df_weekly.iloc[-1].get(col)
+                df_featured[k] = float(val) if pd.notna(val) else np.nan
+            else:
+                df_featured[k] = np.nan
+
         return symbol, df_featured
     except Exception as e:
         logger.debug(f"Error computing {symbol}: {e}")
@@ -108,7 +161,7 @@ def build_training_data(
     results = {}
     with ProcessPoolExecutor(max_workers=max_workers) as pool:
         futures = {
-            pool.submit(_compute_one_symbol_factors, daily_dir, sym, scan_date): sym
+            pool.submit(_compute_one_symbol_factors, daily_dir, sym, scan_date, os.path.dirname(daily_dir)): sym
             for sym in symbols
         }
 
@@ -145,7 +198,8 @@ def build_training_data(
     sample_df = next(iter(results.values()))
     numeric_cols = set(sample_df.select_dtypes(include=[np.number]).columns)
     factor_names = [c for c in factor_names if c in numeric_cols]
-    logger.info(f"Numeric factor columns: {len(factor_names)}")
+    factor_names = _dedup_factors(factor_names)
+    logger.info(f"Numeric factor columns: {len(factor_names)} (after dedup)")
 
     from src.strategy.adaptive_state_machine.attention_learner import _standardize_factors
 
@@ -334,7 +388,7 @@ def build_walk_forward_data(
     results = {}
     with ProcessPoolExecutor(max_workers=max_workers) as pool:
         futures = {
-            pool.submit(_compute_one_symbol_factors, daily_dir, sym, ""): sym
+            pool.submit(_compute_one_symbol_factors, daily_dir, sym, "", os.path.dirname(daily_dir)): sym
             for sym in symbols
         }
         for future in as_completed(futures):
@@ -372,6 +426,8 @@ def build_walk_forward_data(
     sample_df = next(iter(results.values()))
     numeric_cols = set(sample_df.select_dtypes(include=[np.number]).columns)
     factor_names = [c for c in factor_names if c in numeric_cols]
+    factor_names = _dedup_factors(factor_names)
+    logger.info(f"After dedup: {len(factor_names)} factors")
 
     from src.strategy.adaptive_state_machine.attention_learner import _standardize_factors
 
@@ -504,7 +560,7 @@ def _build_daily_to_weekly_sequences_multi(
     results = {}
     with ProcessPoolExecutor(max_workers=max_workers) as pool:
         futures = {
-            pool.submit(_compute_one_symbol_factors, daily_dir, sym, ""): sym
+            pool.submit(_compute_one_symbol_factors, daily_dir, sym, "", os.path.dirname(daily_dir)): sym
             for sym in symbols
         }
         for future in as_completed(futures):
@@ -532,6 +588,8 @@ def _build_daily_to_weekly_sequences_multi(
     sample_df = next(iter(results.values()))
     numeric_cols = set(sample_df.select_dtypes(include=[np.number]).columns)
     factor_names = [c for c in factor_names if c in numeric_cols]
+    factor_names = _dedup_factors(factor_names)
+    logger.info(f"After dedup: {len(factor_names)} factors (multi-scale)")
 
     train_years_set = set(train_years)
     current_year = eval_year

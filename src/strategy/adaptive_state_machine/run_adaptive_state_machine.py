@@ -71,10 +71,8 @@ def main():
     # 其他
     parser.add_argument("--symbols", type=str, help="指定股票列表 (逗号分隔)")
     parser.add_argument("--verbose", "-v", action="store_true", help="详细日志")
-    parser.add_argument("--attention_model", type=str, default="", help="Attention 模型路径")
-    parser.add_argument("--attention_alpha", type=float, default=1.0, help="Attention 权重混合比例 (0=纯IC, 1=纯Attention)")
-    parser.add_argument("--cls_mode", type=str, default="rules", choices=["rules", "model"],
-                        help="状态判定模式: rules=阈值规则 (默认), model=Transformer 分位数回归")
+    parser.add_argument("--attention_model", type=str, default="", help="Transformer 模型路径")
+    parser.add_argument("--attention_alpha", type=float, default=1.0, help="Transformer 权重混合比例")
 
     args = parser.parse_args()
     setup_logging(args.verbose)
@@ -108,7 +106,7 @@ def main():
             output_dir=output_dir,
             attention_model_path=args.attention_model,
             attention_alpha=args.attention_alpha,
-            cls_mode=args.cls_mode,
+            symbols=symbols,
         )
 
         if result.empty:
@@ -130,7 +128,7 @@ def main():
             output_dir=output_dir,
             attention_model_path=args.attention_model,
             attention_alpha=args.attention_alpha,
-            cls_mode=args.cls_mode,
+            symbols=symbols,
         )
 
         if not result:

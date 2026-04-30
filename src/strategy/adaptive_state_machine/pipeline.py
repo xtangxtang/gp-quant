@@ -27,9 +27,9 @@ def run_scan(
     output_dir: str = "",
     attention_model_path: str = "",
     attention_alpha: float = 1.0,
-    cls_mode: str = "rules",
+    symbols: Optional[list[str]] = None,
 ) -> dict:
-    """执行单次扫描 (向后兼容接口)。"""
+    """执行单次扫描。"""
     config_path = os.path.join(config_dir, "adaptive_config.json") if config_dir else ""
 
     config = AdaptiveConfig.load(config_path) if config_path and os.path.exists(config_path) else None
@@ -43,7 +43,7 @@ def run_scan(
         cache_dir=cache_dir,
         attention_model_path=attention_model_path,
         attention_alpha=attention_alpha,
-        cls_mode=cls_mode,
+        symbols=symbols,
     )
 
     _, summary, config = strategy.scan(
@@ -67,9 +67,9 @@ def run_backtest(
     output_dir: str = "",
     attention_model_path: str = "",
     attention_alpha: float = 1.0,
-    cls_mode: str = "rules",
+    symbols: Optional[list[str]] = None,
 ) -> pd.DataFrame:
-    """历史回测 (向后兼容接口)。"""
+    """历史回测。"""
     config_path = os.path.join(config_dir, "adaptive_config.json") if config_dir else ""
 
     strategy = AdaptiveStateMachine(
@@ -78,7 +78,7 @@ def run_backtest(
         cache_dir=cache_dir,
         attention_model_path=attention_model_path,
         attention_alpha=attention_alpha,
-        cls_mode=cls_mode,
+        symbols=symbols,
     )
 
     return strategy.backtest(

@@ -2,11 +2,11 @@
 Adaptive State Machine — 统一策略类
 
 单一入口, 内部组件:
-  feature.py         → 因子计算
-  attention_learner  → Transformer 推理 (attention 权重 + 分位数回归)
-  state_evaluator.py → 规则判定 (rules 模式 fallback)
+  feature.py          → 因子计算
+  attention_learner   → Transformer 推理 (分位数回归 + 截面排序)
+  state_evaluator.py  → 状态继承 (hold 状态管理)
 
-流程: 因子计算 → Transformer 推理 → 截面排序
+流程: 因子计算 → Transformer 预测 → 截面排序 → 状态判定
 
 用法:
   strategy = AdaptiveStateMachine(daily_dir="...", data_root="...")
@@ -27,6 +27,7 @@ import pandas as pd
 from .config import AdaptiveConfig, StockState
 from .feature import FactorCalculator
 from .state_evaluator import StateEvaluator, StateResult
+from .attention_learner import FACTOR_COLUMNS
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +62,7 @@ class AdaptiveStateMachine:
         max_workers: int = 28,
         attention_model_path: str = "",
         attention_alpha: float = 1.0,
-        cls_mode: str = "rules",
+        symbols: Optional[list[str]] = None,
     ):
         self.daily_dir = daily_dir
         self.data_root = data_root
@@ -69,7 +70,7 @@ class AdaptiveStateMachine:
         self.max_workers = max_workers
         self.attention_model_path = attention_model_path
         self.attention_alpha = attention_alpha
-        self.cls_mode = cls_mode  # "rules" or "model"
+        self.symbols = symbols
         self._attention_learner = None
         # 因子截面历史缓存 (用于构建真实序列)
         self._factor_history: list[pd.DataFrame] = []
@@ -95,13 +96,18 @@ class AdaptiveStateMachine:
         self,
         cross_section: pd.DataFrame,
         seq_len: Optional[int] = None,
+        factor_columns: Optional[list[str]] = None,
     ) -> tuple[np.ndarray, list[str]]:
         """
         从因子历史缓存构建真实时序数据。
 
+        因子列严格按 factor_columns 对齐（默认 FACTOR_COLUMNS），避免
+        训练时和推理时因子顺序错位。
+
         Args:
             cross_section: 当前截面数据
             seq_len: 序列长度 (默认用 self._seq_len)
+            factor_columns: 因子列名列表 (默认 FACTOR_COLUMNS)
 
         Returns:
             sequences: (n_stocks, seq_len, n_factors)
@@ -109,15 +115,23 @@ class AdaptiveStateMachine:
         """
         if seq_len is None:
             seq_len = self._seq_len
+        if factor_columns is None:
+            factor_columns = list(FACTOR_COLUMNS)
 
-        # 取数值列
-        numeric_cols = [c for c in cross_section.columns
-                        if cross_section[c].dtype in (np.float32, np.float64, np.int32, np.int64)]
+        n_factors = len(factor_columns)
 
         # 取当前截面中的所有股票
         symbols = list(cross_section.index)
-        factor_values = cross_section[numeric_cols].values.astype(np.float32)
-        n_stocks, n_factors = factor_values.shape
+        n_stocks = len(symbols)
+
+        # 构建列对齐: 只取 cross_section 中存在的因子列，缺失的补 NaN
+        aligned = pd.DataFrame(index=cross_section.index)
+        for col in factor_columns:
+            if col in cross_section.columns:
+                aligned[col] = cross_section[col]
+            else:
+                aligned[col] = np.nan
+        factor_values = aligned[factor_columns].values.astype(np.float32)
 
         # 构建序列: 从历史缓存中取最近 seq_len-1 个截面 + 当前截面
         history = self._factor_history[-(seq_len - 1):]  # 最多取 seq_len-1 个历史
@@ -132,8 +146,8 @@ class AdaptiveStateMachine:
             for i, sym in enumerate(symbols):
                 if sym in hist_df.index:
                     row = hist_df.loc[sym]
-                    vals = row[numeric_cols].values.astype(np.float32)
-                    sequences[i, seq_idx, :] = vals
+                    vals = [row.get(col, np.nan) for col in factor_columns]
+                    sequences[i, seq_idx, :] = np.array(vals, dtype=np.float32)
                 else:
                     sequences[i, seq_idx, :] = np.nan
 
@@ -144,9 +158,7 @@ class AdaptiveStateMachine:
         for i in range(n_stocks):
             for j in range(1, seq_len):
                 if np.any(np.isnan(sequences[i, j, :])):
-                    # 用前一个时间步填充
                     sequences[i, j, :] = sequences[i, j - 1, :]
-            # 如果第一个时间步仍为 NaN，用当前截面填充
             if np.any(np.isnan(sequences[i, 0, :])):
                 sequences[i, 0, :] = sequences[i, actual_len - 1, :]
 
@@ -170,16 +182,16 @@ class AdaptiveStateMachine:
         evaluator: Optional[StateEvaluator] = None,
     ) -> tuple[list, dict, AdaptiveConfig]:
         """
-        执行单次扫描 (Transformer 化流程)。
+        执行单次扫描。
 
-        流程: 因子计算 → Transformer 推理 → 截面排序 / 规则判定
+        流程: 因子计算 → Transformer 预测 → 截面排序 → 状态判定
 
         Args:
             scan_date: YYYYMMDD
             config: 已有配置 (回测传入, 单日扫描留空)
             config_path: 配置持久化路径
             output_dir: 信号输出目录
-            evaluator: 状态评估器 (rules 模式复用, 保留 hold 状态)
+            evaluator: 状态评估器 (复用, 保留 hold 状态)
 
         Returns:
             (results, summary_dict, config)
@@ -198,7 +210,7 @@ class AdaptiveStateMachine:
             cache_dir=self.cache_dir,
             max_workers=self.max_workers,
         )
-        daily_results = calculator.compute_all(scan_date=scan_date)
+        daily_results = calculator.compute_all(scan_date=scan_date, symbols=self.symbols)
         cross_section = calculator.build_cross_section(daily_results)
 
         if cross_section.empty:
@@ -207,37 +219,15 @@ class AdaptiveStateMachine:
         # 缓存当前截面到历史 (用于后续扫描构建真实序列)
         self._factor_history.append(cross_section)
 
-        # 2. 提取 Attention (始终执行)
-        attn_weights = None
-        model_predictions = None
+        # 2. Transformer 预测 → 状态判定
         attn_learner = self._get_attention_learner()
-        if attn_learner is not None:
-            try:
-                attn_weights, model_predictions = self._extract_attention_from_cross_section(
-                    attn_learner, cross_section,
-                )
-                if attn_weights:
-                    logger.info(
-                        f"Attention weights extracted (alpha={self.attention_alpha}), "
-                        f"top3={sorted(attn_weights.items(), key=lambda x: x[1], reverse=True)[:3]}"
-                    )
-            except Exception as e:
-                logger.warning(f"Attention extraction failed: {e}")
-                attn_weights = None
-                model_predictions = None
-
-        # 3. 状态判定
-        if self.cls_mode == "model" and attn_learner is not None:
-            # Transformer 分位数回归 → 截面排序
+        if attn_learner is not None and attn_learner.model is not None:
             results = self._predict_states_from_model(
-                attn_learner, cross_section, daily_results, model_predictions,
+                attn_learner, cross_section, daily_results,
             )
         else:
-            # 现有阈值规则 (传入模型预测校准)
-            evaluator.config = config
-            results = evaluator.evaluate_all(
-                cross_section, daily_results, config, model_predictions,
-            )
+            logger.error("Transformer model not available, cannot run scan")
+            return [], {"scan_date": scan_date, "total_stocks": 0, "error": "model not available"}, config
 
         signal_counts = {s.value: 0 for s in StockState}
         for r in results:
@@ -250,7 +240,7 @@ class AdaptiveStateMachine:
             f"{signal_counts.get('collapse', 0)} collapse"
         )
 
-        # 5. 保存结果
+        # 3. 保存结果
         if output_dir:
             os.makedirs(output_dir, exist_ok=True)
             self._save_signals(results, scan_date, output_dir)
@@ -260,7 +250,7 @@ class AdaptiveStateMachine:
             config.save(config_path)
             logger.info(f"Saved config v{config.version} to {config_path}")
 
-        # 6. 打印摘要
+        # 4. 打印摘要
         _print_scan_summary(results, scan_date)
 
         summary = {
@@ -275,89 +265,33 @@ class AdaptiveStateMachine:
 
         return results, summary, config
 
-    def _extract_attention_from_cross_section(
-        self,
-        attn_learner,
-        cross_section: pd.DataFrame,
-    ) -> tuple[dict[str, float], Optional[dict[str, dict]]]:
-        """
-        从真实历史序列提取 attention 权重 + 模型预测。
-        使用因子历史缓存构建 20 天序列, 而非伪序列。
-
-        Returns:
-            (attention_weights, model_predictions)
-            attention_weights: {factor: weight}
-            model_predictions: {symbol: {"pred_return": float, "pred_up_prob": float}}
-        """
-        if attn_learner.model is None:
-            return {}, None
-
-        n_model_factors = attn_learner.model.n_factors
-        stock_symbols = list(cross_section.index)
-
-        # 从历史缓存构建真实序列
-        sequences, symbols = self._build_real_sequences(cross_section, seq_len=attn_learner.seq_len)
-
-        # 截取模型需要的因子数
-        sequences = sequences[:, :, :n_model_factors]
-
-        # 采样 (避免过多股票)
-        max_stocks = min(500, len(symbols))
-        sequences = sequences[:max_stocks]
-
-        # 提取权重
-        weights = attn_learner.extract_weights(sequences)
-
-        # 提取每只股票的回归/分类预测
-        model_predictions = {}
-        try:
-            output = attn_learner.model.forward(sequences, training=False)
-            pred_returns = output["regression"]
-            pred_cls = output["classification"]
-
-            exp_logits = np.exp(pred_cls - pred_cls.max(axis=1, keepdims=True))
-            up_probs = exp_logits[:, 1] / exp_logits.sum(axis=1)
-
-            for i in range(max_stocks):
-                sym = symbols[i]
-                model_predictions[sym] = {
-                    "pred_return": float(pred_returns[i]),
-                    "pred_up_prob": float(up_probs[i]),
-                }
-        except Exception as e:
-            logger.warning(f"Model prediction extraction failed: {e}")
-
-        return weights, model_predictions
-
     def _predict_states_from_model(
         self,
         attn_learner,
         cross_section: pd.DataFrame,
         daily_results: dict,
-        model_predictions: Optional[dict[str, dict]],
     ) -> list[StateResult]:
         """
-        用 Transformer 模型输出构建 StateResult (Phase 1: 分位数回归)。
-        使用真实历史序列而非伪序列。
+        用 Transformer 模型输出构建 StateResult。
 
-        用分位数预测计算预期收益和风险, 做截面排序。
+        因子列严格按模型训练时的 FACTOR_COLUMNS 对齐，避免语义错位。
         """
         if attn_learner.model is None:
             return []
 
-        # 从历史缓存构建真实序列
-        sequences, symbols = self._build_real_sequences(cross_section, seq_len=attn_learner.seq_len)
-
-        # 截取模型需要的因子数
         n_model_factors = attn_learner.model.n_factors
-        sequences = sequences[:, :, :n_model_factors]
+
+        # 从历史缓存构建真实序列，因子列按 FACTOR_COLUMNS 对齐
+        sequences, symbols = self._build_real_sequences(
+            cross_section, seq_len=attn_learner.seq_len,
+            factor_columns=FACTOR_COLUMNS[:n_model_factors],
+        )
 
         try:
             output = attn_learner.model.forward(sequences, training=False)
             pred_returns = output["regression"]
             pred_cls = output["classification"]
             pred_quantiles = output["quantiles"]  # (n_stocks, 9)
-            # Convert torch tensors to numpy
             if hasattr(pred_returns, "detach"):
                 pred_returns = pred_returns.detach().cpu().numpy()
                 pred_cls = pred_cls.detach().cpu().numpy()
@@ -366,18 +300,18 @@ class AdaptiveStateMachine:
             logger.warning(f"Model prediction failed: {e}")
             return []
 
-        # 计算上涨概率（保留用于记录，但不用于状态判定）
+        # 计算上涨概率
         exp_logits = np.exp(pred_cls - pred_cls.max(axis=1, keepdims=True))
         up_probs = exp_logits[:, 1] / exp_logits.sum(axis=1)
-        # 用分位数中位数 (q50) 判断方向，替代分类头
-        # q50 占 40% loss 权重，比分类头 (15% CE) 可靠得多
+
+        # 用分位数中位数 (q50) 判断方向
         from src.strategy.adaptive_state_machine.attention_learner import QUANTILE_LEVELS
         _q_idx = {q: i for i, q in enumerate(QUANTILE_LEVELS)}
-        q50 = pred_quantiles[:, _q_idx[0.5]]  # median prediction
+        q50 = pred_quantiles[:, _q_idx[0.5]]
 
         # 用分位数计算风险 (IQR)
-        q_low = pred_quantiles[:, _q_idx[0.2]]   # 20th percentile
-        q_high = pred_quantiles[:, _q_idx[0.8]]  # 80th percentile
+        q_low = pred_quantiles[:, _q_idx[0.2]]
+        q_high = pred_quantiles[:, _q_idx[0.8]]
         risk_iqr = q_high - q_low
 
         # 综合评分: 预期收益 / 风险 (Sharpe-like)
@@ -405,8 +339,6 @@ class AdaptiveStateMachine:
             pct = float(percentiles[i])
 
             # 用截面排名百分位 + 分位数中位数方向做状态判定
-            # q50 占 40% loss 权重，比分类头 (15% CE) 可靠
-            # 但 q50 可能整体偏负（熊市），用相对排名替代绝对 > 0 阈值
             q50_pctile = float(np.sum(q50 <= q50_val) / max(len(q50), 1))
 
             if pct > 0.9 and q50_pctile > 0.8 and pred_return > 0:

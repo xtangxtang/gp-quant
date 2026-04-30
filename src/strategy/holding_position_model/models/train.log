@@ -1,0 +1,161 @@
+02:59:56 [INFO] __main__: Training mode: daily_dir=/mnt/nvme2/xtang/gp-workspace/gp-data/tushare-daily-full, max_stocks=5515
+02:59:56 [INFO] src.strategy.holding_position_model.data_builder: Computing factors for 5515 stocks...
+03:10:56 [INFO] src.strategy.holding_position_model.data_builder: Computed factors for 5458/5515 stocks
+03:10:58 [INFO] src.strategy.holding_position_model.data_builder: Factor columns: 45 (after dedup)
+03:11:00 [INFO] src.strategy.holding_position_model.data_builder: Time split: 6905 train / 1727 eval dates
+03:16:47 [INFO] src.strategy.holding_position_model.data_builder: Sample counts: 49738860 train / 46446960 eval
+03:17:12 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 100/5458 stocks, 185160 train / 427720 eval samples written
+03:17:28 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 200/5458 stocks, 400040 train / 815300 eval samples written
+03:17:45 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 300/5458 stocks, 595500 train / 1226100 eval samples written
+03:18:02 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 400/5458 stocks, 817060 train / 1653040 eval samples written
+03:18:17 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 500/5458 stocks, 935200 train / 2070660 eval samples written
+03:18:34 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 600/5458 stocks, 1168560 train / 2468500 eval samples written
+03:18:51 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 700/5458 stocks, 1406800 train / 2845380 eval samples written
+03:19:08 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 800/5458 stocks, 1606980 train / 3269020 eval samples written
+03:19:23 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 900/5458 stocks, 1812540 train / 3622280 eval samples written
+03:19:38 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 1000/5458 stocks, 1983640 train / 4006940 eval samples written
+03:19:55 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 1100/5458 stocks, 2180600 train / 4423900 eval samples written
+03:20:11 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 1200/5458 stocks, 2396460 train / 4789860 eval samples written
+03:20:28 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 1300/5458 stocks, 2579720 train / 5268680 eval samples written
+03:20:48 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 1400/5458 stocks, 2834300 train / 5726260 eval samples written
+03:21:03 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 1500/5458 stocks, 3030680 train / 6095900 eval samples written
+03:21:22 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 1600/5458 stocks, 3266520 train / 6546680 eval samples written
+03:21:38 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 1700/5458 stocks, 3452220 train / 6947540 eval samples written
+03:21:52 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 1800/5458 stocks, 3620640 train / 7295820 eval samples written
+03:22:10 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 1900/5458 stocks, 3876960 train / 7710620 eval samples written
+03:22:26 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 2000/5458 stocks, 4063040 train / 8103380 eval samples written
+03:22:44 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 2100/5458 stocks, 4299080 train / 8502640 eval samples written
+03:23:03 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 2200/5458 stocks, 4539340 train / 8959640 eval samples written
+03:23:20 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 2300/5458 stocks, 4768180 train / 9333600 eval samples written
+03:23:40 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 2400/5458 stocks, 4989560 train / 9778680 eval samples written
+03:23:56 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 2500/5458 stocks, 5176200 train / 10151060 eval samples written
+03:24:10 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 2600/5458 stocks, 5339480 train / 10447060 eval samples written
+03:24:27 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 2700/5458 stocks, 5516060 train / 10856860 eval samples written
+03:24:44 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 2800/5458 stocks, 5720100 train / 11259220 eval samples written
+03:25:01 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 2900/5458 stocks, 5945160 train / 11626620 eval samples written
+03:25:19 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 3000/5458 stocks, 6171280 train / 12055740 eval samples written
+03:25:34 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 3100/5458 stocks, 6346660 train / 12407320 eval samples written
+03:25:52 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 3200/5458 stocks, 6569540 train / 12806620 eval samples written
+03:26:09 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 3300/5458 stocks, 6769780 train / 13226940 eval samples written
+03:26:24 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 3400/5458 stocks, 6953180 train / 13575240 eval samples written
+03:26:39 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 3500/5458 stocks, 7145160 train / 13926180 eval samples written
+03:26:56 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 3600/5458 stocks, 7327040 train / 14325880 eval samples written
+03:27:12 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 3700/5458 stocks, 7509360 train / 14685240 eval samples written
+03:27:29 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 3800/5458 stocks, 7733700 train / 15082840 eval samples written
+03:27:47 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 3900/5458 stocks, 7963000 train / 15490240 eval samples written
+03:28:03 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 4000/5458 stocks, 8159380 train / 15868500 eval samples written
+03:28:20 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 4100/5458 stocks, 8359760 train / 16276640 eval samples written
+03:28:38 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 4200/5458 stocks, 8569600 train / 16688620 eval samples written
+03:28:55 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 4300/5458 stocks, 8772280 train / 17094200 eval samples written
+03:29:12 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 4400/5458 stocks, 8983140 train / 17507740 eval samples written
+03:29:30 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 4500/5458 stocks, 9191260 train / 17934320 eval samples written
+03:29:49 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 4600/5458 stocks, 9412460 train / 18395460 eval samples written
+03:30:07 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 4700/5458 stocks, 9624400 train / 18798000 eval samples written
+03:30:27 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 4800/5458 stocks, 9858560 train / 19241700 eval samples written
+03:30:44 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 4900/5458 stocks, 10074600 train / 19645120 eval samples written
+03:31:04 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 5000/5458 stocks, 10322560 train / 20081500 eval samples written
+03:31:20 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 5100/5458 stocks, 10551800 train / 20419520 eval samples written
+03:31:38 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 5200/5458 stocks, 10748520 train / 20851800 eval samples written
+03:31:55 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 5300/5458 stocks, 10938160 train / 21271560 eval samples written
+03:32:06 [INFO] src.strategy.holding_position_model.data_builder: Actual written: 11068960 train / 21498520 eval samples
+04:00:18 [INFO] src.strategy.holding_position_model.data_builder: Standardization done. Train: 11068960, Eval: 21498520
+04:00:18 [INFO] src.strategy.holding_position_model.data_builder:   Factors: 45, seq_len: 60
+04:00:18 [INFO] src.strategy.holding_position_model.data_builder:   Stay ratio: 44.6%, Collapse ratio: 31.8%
+04:00:20 [INFO] __main__: Model created: 866,115 parameters
+04:00:21 [INFO] src.strategy.holding_position_model.train: Training: 11068960 samples, eval: 21498520 samples
+04:33:08 [INFO] src.strategy.holding_position_model.train: Epoch 1/30: train_loss=25.5587 eval_loss=24.1256 stay_acc=0.546 collapse_acc=0.826 days_mae=5.3 (1363.1s)
+07:01:34 [INFO] src.strategy.holding_position_model.train: Epoch 5/30: train_loss=25.2057 eval_loss=24.1881 stay_acc=0.570 collapse_acc=0.826 days_mae=5.5 (2195.8s)
+09:36:57 [INFO] src.strategy.holding_position_model.train: Epoch 10/30: train_loss=25.1783 eval_loss=24.1432 stay_acc=0.570 collapse_acc=0.826 days_mae=5.5 (1326.0s)
+12:12:04 [INFO] src.strategy.holding_position_model.train: Epoch 15/30: train_loss=25.1704 eval_loss=24.2149 stay_acc=0.570 collapse_acc=0.826 days_mae=5.6 (1320.4s)
+14:12:05 [INFO] __main__: Training mode: daily_dir=/mnt/nvme2/xtang/gp-workspace/gp-data/tushare-daily-full, max_stocks=5515
+14:12:05 [INFO] __main__: No existing memmap found, building from scratch...
+14:12:05 [INFO] src.strategy.holding_position_model.data_builder: Computing factors for 5515 stocks...
+14:22:34 [INFO] src.strategy.holding_position_model.data_builder: Computed factors for 5458/5515 stocks
+14:22:36 [INFO] src.strategy.holding_position_model.data_builder: Factor columns: 45 (after dedup)
+14:22:38 [INFO] src.strategy.holding_position_model.data_builder: Time split: 6905 train / 1727 eval dates
+14:28:13 [INFO] src.strategy.holding_position_model.data_builder: Sample counts: 49724500 train / 46461320 eval
+14:28:29 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 100/5458 stocks, 185660 train / 425820 eval samples written
+14:28:45 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 200/5458 stocks, 397180 train / 820940 eval samples written
+14:29:01 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 300/5458 stocks, 592360 train / 1232900 eval samples written
+14:29:18 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 400/5458 stocks, 814620 train / 1657900 eval samples written
+14:29:33 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 500/5458 stocks, 932760 train / 2076260 eval samples written
+14:29:50 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 600/5458 stocks, 1166740 train / 2476260 eval samples written
+14:30:06 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 700/5458 stocks, 1403200 train / 2852380 eval samples written
+14:30:23 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 800/5458 stocks, 1604040 train / 3277220 eval samples written
+14:30:38 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 900/5458 stocks, 1809720 train / 3627480 eval samples written
+14:30:53 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 1000/5458 stocks, 1980600 train / 4010980 eval samples written
+14:31:10 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 1100/5458 stocks, 2179620 train / 4424600 eval samples written
+14:31:26 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 1200/5458 stocks, 2391180 train / 4790840 eval samples written
+14:31:43 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 1300/5458 stocks, 2577180 train / 5270940 eval samples written
+14:32:02 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 1400/5458 stocks, 2827020 train / 5733120 eval samples written
+14:32:17 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 1500/5458 stocks, 3020240 train / 6103340 eval samples written
+14:32:36 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 1600/5458 stocks, 3253640 train / 6553500 eval samples written
+14:32:51 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 1700/5458 stocks, 3440560 train / 6953460 eval samples written
+14:33:05 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 1800/5458 stocks, 3601100 train / 7306840 eval samples written
+14:33:23 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 1900/5458 stocks, 3861600 train / 7714720 eval samples written
+14:33:39 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 2000/5458 stocks, 4047280 train / 8107280 eval samples written
+14:33:56 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 2100/5458 stocks, 4280160 train / 8501820 eval samples written
+14:34:14 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 2200/5458 stocks, 4528300 train / 8957140 eval samples written
+14:34:31 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 2300/5458 stocks, 4751680 train / 9339780 eval samples written
+14:34:48 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 2400/5458 stocks, 4975860 train / 9783740 eval samples written
+14:35:03 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 2500/5458 stocks, 5163200 train / 10153860 eval samples written
+14:35:16 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 2600/5458 stocks, 5325260 train / 10449560 eval samples written
+14:35:31 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 2700/5458 stocks, 5498980 train / 10859700 eval samples written
+14:35:48 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 2800/5458 stocks, 5704340 train / 11261840 eval samples written
+14:36:04 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 2900/5458 stocks, 5927560 train / 11631300 eval samples written
+14:36:22 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 3000/5458 stocks, 6153080 train / 12059360 eval samples written
+14:36:36 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 3100/5458 stocks, 6331440 train / 12408840 eval samples written
+14:36:53 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 3200/5458 stocks, 6551640 train / 12806860 eval samples written
+14:37:10 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 3300/5458 stocks, 6750500 train / 13230980 eval samples written
+14:37:25 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 3400/5458 stocks, 6933260 train / 13577080 eval samples written
+14:37:39 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 3500/5458 stocks, 7125220 train / 13923720 eval samples written
+14:37:55 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 3600/5458 stocks, 7308640 train / 14327760 eval samples written
+14:38:10 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 3700/5458 stocks, 7488700 train / 14687120 eval samples written
+14:38:27 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 3800/5458 stocks, 7716820 train / 15083520 eval samples written
+14:38:44 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 3900/5458 stocks, 7935820 train / 15490000 eval samples written
+14:39:00 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 4000/5458 stocks, 8145080 train / 15870040 eval samples written
+14:39:16 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 4100/5458 stocks, 8342840 train / 16270420 eval samples written
+14:39:33 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 4200/5458 stocks, 8554500 train / 16682440 eval samples written
+14:39:49 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 4300/5458 stocks, 8756100 train / 17097500 eval samples written
+14:40:06 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 4400/5458 stocks, 8964280 train / 17506480 eval samples written
+14:40:22 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 4500/5458 stocks, 9168960 train / 17933640 eval samples written
+14:40:41 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 4600/5458 stocks, 9389640 train / 18393880 eval samples written
+14:40:57 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 4700/5458 stocks, 9600100 train / 18797820 eval samples written
+14:41:15 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 4800/5458 stocks, 9838160 train / 19237760 eval samples written
+14:41:31 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 4900/5458 stocks, 10051960 train / 19644700 eval samples written
+14:41:49 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 5000/5458 stocks, 10297420 train / 20085300 eval samples written
+14:42:04 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 5100/5458 stocks, 10516480 train / 20422720 eval samples written
+14:42:21 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 5200/5458 stocks, 10717360 train / 20856600 eval samples written
+14:42:37 [INFO] src.strategy.holding_position_model.data_builder:   Progress: 5300/5458 stocks, 10903040 train / 21276760 eval samples written
+14:42:47 [INFO] src.strategy.holding_position_model.data_builder: Actual written: 11034220 train / 21502440 eval samples
+15:01:23 [INFO] src.strategy.holding_position_model.data_builder: Standardization done. Train: 11034220, Eval: 21502440
+15:01:23 [INFO] src.strategy.holding_position_model.data_builder:   Factors: 45, seq_len: 60
+15:01:23 [INFO] src.strategy.holding_position_model.data_builder:   Stay ratio: 44.6%, Collapse ratio: 31.8%
+15:01:28 [INFO] __main__: Loading data from memmap to RAM...
+15:02:25 [INFO] __main__:   Loaded X_factors_train into RAM: (11034220, 60, 45), 111.0 GB
+15:02:30 [INFO] __main__:   Loaded X_holding_train into RAM: (11034220, 5), 0.2 GB
+15:02:30 [INFO] __main__:   Loaded y_stay_train into RAM: (11034220,), 0.0 GB
+15:02:30 [INFO] __main__:   Loaded y_collapse_train into RAM: (11034220,), 0.0 GB
+15:02:30 [INFO] __main__:   Loaded y_days_train into RAM: (11034220,), 0.0 GB
+15:02:30 [INFO] __main__:   Loaded sample_weights_train into RAM: (11034220,), 0.0 GB
+15:04:26 [INFO] __main__:   Loaded X_factors_eval into RAM: (21502440, 60, 45), 216.3 GB
+15:04:34 [INFO] __main__:   Loaded X_holding_eval into RAM: (21502440, 5), 0.4 GB
+15:04:34 [INFO] __main__:   Loaded y_stay_eval into RAM: (21502440,), 0.1 GB
+15:04:34 [INFO] __main__:   Loaded y_collapse_eval into RAM: (21502440,), 0.1 GB
+15:04:34 [INFO] __main__:   Loaded y_days_eval into RAM: (21502440,), 0.1 GB
+15:04:34 [INFO] __main__:   Loaded sample_weights_eval into RAM: (21502440,), 0.1 GB
+15:04:34 [INFO] __main__: Total data in RAM: 328.4 GB
+15:04:34 [INFO] __main__: Model created: 866,115 parameters
+15:04:36 [INFO] src.strategy.holding_position_model.train: Training: 11034220 samples, eval: 21502440 samples
+15:34:24 [INFO] src.strategy.holding_position_model.train: Epoch 1/30: train_loss=25.5087 eval_loss=24.1723 stay_acc=0.571 collapse_acc=0.826 days_mae=5.5 (1299.5s)
+17:34:31 [INFO] src.strategy.holding_position_model.train: Epoch 5/30: train_loss=25.1922 eval_loss=24.2100 stay_acc=0.570 collapse_acc=0.826 days_mae=5.5 (1315.6s)
+20:05:13 [INFO] src.strategy.holding_position_model.train: Epoch 10/30: train_loss=25.1596 eval_loss=24.1948 stay_acc=0.570 collapse_acc=0.826 days_mae=5.5 (1313.7s)
+22:35:56 [INFO] src.strategy.holding_position_model.train: Epoch 15/30: train_loss=25.1539 eval_loss=24.2235 stay_acc=0.570 collapse_acc=0.825 days_mae=5.5 (1314.1s)
+01:07:21 [INFO] src.strategy.holding_position_model.train: Epoch 20/30: train_loss=25.1500 eval_loss=24.1668 stay_acc=0.571 collapse_acc=0.826 days_mae=5.4 (1311.1s)
+03:38:17 [INFO] src.strategy.holding_position_model.train: Epoch 25/30: train_loss=25.1472 eval_loss=24.2109 stay_acc=0.572 collapse_acc=0.826 days_mae=5.5 (1315.3s)
+06:08:50 [INFO] src.strategy.holding_position_model.train: Epoch 30/30: train_loss=25.1440 eval_loss=24.1642 stay_acc=0.572 collapse_acc=0.826 days_mae=5.5 (1309.6s)
+06:08:50 [INFO] src.strategy.holding_position_model.model: Saved model to src/strategy/holding_position_model/models/holding_model.pt
+06:08:50 [INFO] __main__: Training complete. Model saved to src/strategy/holding_position_model/models/holding_model.pt
+06:08:50 [INFO] __main__:   Epoch 28: loss=25.1456 eval_loss=24.2453 stay_acc=0.571 collapse_acc=0.825 days_mae=5.6
+06:08:50 [INFO] __main__:   Epoch 29: loss=25.1457 eval_loss=24.1887 stay_acc=0.572 collapse_acc=0.826 days_mae=5.3
+06:08:50 [INFO] __main__:   Epoch 30: loss=25.1440 eval_loss=24.1642 stay_acc=0.572 collapse_acc=0.826 days_mae=5.5
